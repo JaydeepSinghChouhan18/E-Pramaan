@@ -1,78 +1,42 @@
-# ==============================================================================
-# MERN Project Root .gitignore
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# Dependencies (Never commit these!)
-# ------------------------------------------------------------------------------
+# Dependencies
 node_modules/
-/client/node_modules/
-/server/node_modules/
-.pnp
-.pnp.js
+**/node_modules/
 
-# ------------------------------------------------------------------------------
-# Environment Variables & Secrets (Crucial for security)
-# ------------------------------------------------------------------------------
+# Environment / secrets
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-*.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
-# ------------------------------------------------------------------------------
-# Production Builds & Compiled Code
-# ------------------------------------------------------------------------------
+# Build output
 dist/
 build/
-/client/build/
-/client/dist/
-out/
-.next/
+coverage/
+.cache/
+.vite/
 
-# ------------------------------------------------------------------------------
-# Logs and Runtime Artifacts
-# ------------------------------------------------------------------------------
+# Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
 
-# ------------------------------------------------------------------------------
-# Testing & Coverage Reports
-# ------------------------------------------------------------------------------
-coverage/
-/client/coverage/
-.nyc_output
-
-# ------------------------------------------------------------------------------
-# IDE / Text Editor Configurations
-# ------------------------------------------------------------------------------
-.vscode/
-!.vscode/extensions.json
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.swp
-*.swo
-
-# ------------------------------------------------------------------------------
-# Operating System Files
-# ------------------------------------------------------------------------------
+# OS
 .DS_Store
-.DS_Store?
-._*
 Thumbs.db
-ehthumbs.db
-Desktop.ini
 
-# ------------------------------------------------------------------------------
-# Local Uploads / Media Storage (If applicable)
-# ------------------------------------------------------------------------------
-/server/uploads/
-/server/public/uploads/
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Supabase local
+.supabase/
+
+# TypeScript
+*.tsbuildinfo

@@ -13,9 +13,14 @@
     "typecheck": "npm run typecheck --workspaces",
     "backend:dev": "npm run dev --workspace=backend",
     "backend:build": "npm run build --workspace=backend",
+    "backend:start": "node backend/dist/index.js",
     "backend:typecheck": "npm run typecheck --workspace=backend",
     "frontend:dev": "npm run dev --workspace=frontend",
     "frontend:build": "npm run build --workspace=frontend",
     "frontend:typecheck": "npm run typecheck --workspace=frontend"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
   }
 }
