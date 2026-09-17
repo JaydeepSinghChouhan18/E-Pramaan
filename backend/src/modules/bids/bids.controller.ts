@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { BidsService } from './bids.service.js';
-import { createBidSchema, attachDocumentSchema, submitBidSchema, bidQuerySchema } from './bids.validation.js';
+import { createBidSchema, attachDocumentSchema, submitBidSchema, bidQuerySchema, BidQuery } from './bids.validation.js';
 import { AppError } from '../../middlewares/errorHandler.js';
 
 export class BidsController {
@@ -39,7 +39,8 @@ export class BidsController {
         throw new AppError('Invalid query parameters', 400, 'VALIDATION_ERROR', parseResult.error.format());
       }
 
-      const result = await BidsService.getMyBids(user, parseResult.data);
+      const queryData: BidQuery = parseResult.data;
+      const result = await BidsService.getMyBids(user, queryData);
       res.json({
         success: true,
         data: result

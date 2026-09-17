@@ -21,6 +21,7 @@ import { getSupabaseAdminClient } from '../../config/supabase.js';
 import { AppError } from '../../middlewares/errorHandler.js';
 import { config } from '../../config/env.js';
 import { DocumentIntelligenceService } from '../compliance/documentIntelligence.js';
+import { BidQuery } from './bids.validation.js';
 
 export class BidsService {
   /**
@@ -118,14 +119,7 @@ export class BidsService {
    */
   static async getMyBids(
     user: UserProfile,
-    query: {
-      page: number;
-      pageSize: number;
-      search?: string;
-      status?: BidStatus;
-      sortBy: string;
-      sortOrder: 'asc' | 'desc';
-    }
+    query: BidQuery
   ): Promise<PaginatedResponse<BidListItem>> {
     if (!config.hasSupabaseConfigured()) {
       return { items: [], page: query.page, pageSize: query.pageSize, total: 0, totalPages: 0 };

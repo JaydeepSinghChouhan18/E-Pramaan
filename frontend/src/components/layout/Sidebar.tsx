@@ -111,7 +111,7 @@ export const Sidebar: React.FC = () => {
             key={item.path}
             to={item.path}
             end={item.path === '/officer/tenders' || item.path.endsWith('/dashboard') || item.path === '/officer/tenders/create'}
-            className={({ isActive }) =>
+            className={({ isActive }: { isActive: boolean }) =>
               `flex items-center justify-between px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
                 isActive
                   ? 'bg-gov-navy text-white shadow-xs'

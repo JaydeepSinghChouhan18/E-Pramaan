@@ -31,3 +31,5 @@ export const bidQuerySchema = z.object({
   sortBy: z.enum(['created_at', 'submitted_at', 'bid_number', 'status']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc')
 });
+
+export type BidQuery = z.infer<typeof bidQuerySchema>;

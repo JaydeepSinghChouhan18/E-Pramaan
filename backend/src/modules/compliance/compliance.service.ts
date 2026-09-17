@@ -5,7 +5,8 @@ import {
   UserProfile,
   UserRole,
   VerificationStatus,
-  Discrepancy
+  Discrepancy,
+  RequirementEvaluation
 } from '@e-pramaan/shared';
 import { getSupabaseAdminClient } from '../../config/supabase.js';
 import { AppError } from '../../middlewares/errorHandler.js';
@@ -382,7 +383,7 @@ export class ComplianceService {
       bidNumber: fullRun.bidNumber,
       verificationStatus: fullRun.verificationStatus,
       mandatoryComplied: fullRun.complianceScore.mandatoryComplied,
-      evaluations: fullRun.evaluations.map(e => ({
+      evaluations: fullRun.evaluations.map((e: RequirementEvaluation) => ({
         requirementCode: e.requirementCode,
         requirementName: e.requirementName,
         category: e.category,
@@ -394,7 +395,7 @@ export class ComplianceService {
         evidenceAttached: e.evidenceFound,
         discrepanciesCount: e.discrepancies.length
       })),
-      discrepancies: fullRun.discrepancies.map(d => ({
+      discrepancies: fullRun.discrepancies.map((d: Discrepancy) => ({
         code: d.code,
         title: d.title,
         description: d.description,
