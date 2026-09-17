@@ -1,0 +1,21 @@
+{
+  "name": "e-pramaan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "e-Pramaan: National Trust & Verification Platform for Government Procurement",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "backend:dev": "npm run dev --workspace=backend",
+    "backend:build": "npm run build --workspace=backend",
+    "backend:typecheck": "npm run typecheck --workspace=backend",
+    "frontend:dev": "npm run dev --workspace=frontend",
+    "frontend:build": "npm run build --workspace=frontend",
+    "frontend:typecheck": "npm run typecheck --workspace=frontend"
+  }
+}

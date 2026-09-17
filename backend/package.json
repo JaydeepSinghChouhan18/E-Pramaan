@@ -1,0 +1,33 @@
+{
+  "name": "@e-pramaan/backend",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@e-pramaan/shared": "*",
+    "@supabase/supabase-js": "^2.43.4",
+    "@types/multer": "^2.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "multer": "^2.4.0",
+    "pdf-parse": "^2.4.5",
+    "tesseract.js": "^7.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "@types/pdf-parse": "^1.1.5",
+    "tsx": "^4.11.0",
+    "typescript": "^5.4.5"
+  },
+  "type": "module"
+}
