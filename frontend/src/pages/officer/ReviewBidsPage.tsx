@@ -667,18 +667,22 @@ export const ReviewBidsPage: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => setViewingDoc({
+                                      id: attachedDoc.id,
+                                      bidId: inspectingBid?.id,
                                       name: attachedDoc.documentName,
                                       size: attachedDoc.fileSize,
+                                      mimeType: (attachedDoc as any).mimeType,
                                       hash: attachedDoc.sha256Hash || undefined,
                                       reqName: attachedDoc.requirementName,
                                       reqCode: attachedDoc.requirementCode,
                                       status: attachedDoc.verificationStatus,
+                                      storagePath: (attachedDoc as any).storagePath,
                                       uploadedAt: (attachedDoc as any).uploadedAt || (attachedDoc as any).createdAt || new Date().toISOString(),
                                       organizationName: inspectingBid?.bidderOrganization?.legalName,
                                     })}
                                     className="inline-flex items-center text-[10px] font-semibold text-gov-navy hover:underline cursor-pointer"
                                   >
-                                    <Eye className="w-3 h-3 mr-1" /> View Original Certificate
+                                    <Eye className="w-3 h-3 mr-1" /> View Original Document
                                   </button>
                                 </div>
                               )}
@@ -725,18 +729,22 @@ export const ReviewBidsPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => setViewingDoc({
+                                    id: doc.id,
+                                    bidId: inspectingBid?.id,
                                     name: doc.documentName,
                                     size: doc.fileSize,
+                                    mimeType: (doc as any).mimeType,
                                     hash: doc.sha256Hash || undefined,
                                     reqName: doc.requirementName,
                                     reqCode: doc.requirementCode,
                                     status: doc.verificationStatus,
+                                    storagePath: (doc as any).storagePath,
                                     uploadedAt: (doc as any).uploadedAt || (doc as any).createdAt || new Date().toISOString(),
                                     organizationName: inspectingBid?.bidderOrganization?.legalName,
                                   })}
                                   className="inline-flex items-center px-2.5 py-1 bg-gov-navy text-white hover:bg-gov-navyLight rounded text-[11px] font-semibold transition shadow-2xs cursor-pointer"
                                 >
-                                  <Eye className="w-3 h-3 mr-1" /> View Original Certificate
+                                  <Eye className="w-3 h-3 mr-1" /> View Original Document
                                 </button>
                               </div>
                             </div>

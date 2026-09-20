@@ -31,6 +31,13 @@ router.post(
   AwardsController.recordAwardDecision
 );
 
+router.post(
+  ['/tenders/:tenderId/revoke', '/tenders/:tenderId/reopen'],
+  requireAuthenticatedUser,
+  requireAnyRole([UserRole.OFFICER, UserRole.ADMIN]),
+  AwardsController.revokeAwardDecision
+);
+
 router.get(
   '/decisions/:decisionId/reconstruction',
   requireAuthenticatedUser,

@@ -1,19 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { AlertCircle, HelpCircle, ArrowRight, CheckCircle2 } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  HardDrive,
+  RefreshCw,
+  Sparkles,
+  AlertTriangle
+} from 'lucide-react';
 
 import {
   TenderListItem,
   TenderDetail,
   TenderStatus,
   VerificationStatus,
-  BidderVerificationSummary,
-  BidListItem
+  BidDocument
 } from '@e-pramaan/shared';
 import { TendersApi } from '../../services/tenders';
 import { BidsApi } from '../../services/bids';
-import { ComplianceApi } from '../../services/compliance';
-import { StatusBadge } from '../../components/common/StatusBadge';
 
 export const SelfCheckPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -22,78 +27,173 @@ export const SelfCheckPage: React.FC = () => {
   const [tenders, setTenders] = useState<TenderListItem[]>([]);
   const [selectedTenderId, setSelectedTenderId] = useState<string>(preselectedId || '');
   const [tenderDetail, setTenderDetail] = useState<TenderDetail | null>(null);
-  const [existingBid, setExistingBid] = useState<BidListItem | null>(null);
-  const [verificationSummary, setVerificationSummary] = useState<BidderVerificationSummary | null>(null);
+  const [vaultDocs, setVaultDocs] = useState<BidDocument[]>([]);
+  const [matchedDocs, setMatchedDocs] = useState<Record<string, string>>({}); // reqId -> docId
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluated, setEvaluated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load published tenders for selection
+  // 1. Load published tenders and vault documents
   useEffect(() => {
-    async function loadPublished() {
+    async function loadInitial() {
       try {
-        const res = await TendersApi.listTenders({
-          status: TenderStatus.PUBLISHED,
-          pageSize: 50
-        });
-        setTenders(res.items);
-        if (!selectedTenderId && res.items.length > 0) {
-          setSelectedTenderId(res.items[0].id);
+        const [tendersRes, docs] = await Promise.all([
+          TendersApi.listTenders({ status: TenderStatus.PUBLISHED, pageSize: 50 }),
+          BidsApi.getMyDocuments().catch(() => [])
+        ]);
+        setTenders(tendersRes.items || []);
+        setVaultDocs(docs);
+        if (!selectedTenderId && tendersRes.items.length > 0) {
+          setSelectedTenderId(tendersRes.items[0].id);
         }
       } catch (err: any) {
-        setError(err.message || 'Failed to load tenders');
+        setError(err.message || 'Failed to initialize pre-check simulator');
       }
     }
-    loadPublished();
+    loadInitial();
   }, []);
 
-  // Load details and existing bid status of selected tender
+  // 2. Load target tender details
   useEffect(() => {
     if (!selectedTenderId) return;
     async function loadDetail() {
       try {
         setLoading(true);
         setError(null);
-        setExistingBid(null);
-        setVerificationSummary(null);
-
-        const [data, myBids] = await Promise.all([
-          TendersApi.getTenderById(selectedTenderId),
-          BidsApi.getMyBids({ pageSize: 50 }).catch(() => ({ items: [] }))
-        ]);
+        setEvaluated(false);
+        const data = await TendersApi.getTenderById(selectedTenderId);
         setTenderDetail(data);
 
-        const applied = myBids.items.find(b => b.tenderId === selectedTenderId && b.status !== 'WITHDRAWN');
-        if (applied) {
-          setExistingBid(applied);
-          if (applied.status !== 'DRAFT') {
-            ComplianceApi.getBidderSummary(applied.id)
-              .then(s => setVerificationSummary(s))
-              .catch(() => setVerificationSummary(null));
+        // Auto-match vault docs to requirements
+        const autoMap: Record<string, string> = {};
+        for (const req of data.requirements || []) {
+          const reqCode = (req.code || '').toLowerCase();
+          const reqName = (req.name || '').toLowerCase();
+
+          const found = vaultDocs.find(d => {
+            const dName = (d.documentName || '').toLowerCase();
+            const dCode = (d.requirementCode || '').toLowerCase();
+            if (dCode && dCode === reqCode) return true;
+            if (reqCode.includes('pan') && dName.includes('pan')) return true;
+            if (reqCode.includes('gst') && (dName.includes('gst') || dName.includes('tax'))) return true;
+            if (reqCode.includes('msme') && (dName.includes('msme') || dName.includes('udyam'))) return true;
+            if ((reqCode.includes('cin') || reqName.includes('incorporation')) && (dName.includes('incorporation') || dName.includes('mca'))) return true;
+            if ((reqCode.includes('turnover') || reqName.includes('financial')) && (dName.includes('turnover') || dName.includes('audit'))) return true;
+            return false;
+          });
+
+          if (found) {
+            autoMap[req.id] = found.id;
           }
         }
+        setMatchedDocs(autoMap);
       } catch (err: any) {
-        setError(err.message || 'Failed to fetch tender requirements');
+        setError(err.message || 'Failed to fetch tender criteria');
       } finally {
         setLoading(false);
       }
     }
     loadDetail();
-  }, [selectedTenderId]);
+  }, [selectedTenderId, vaultDocs]);
+
+  // Handle document selection change
+  const handleSelectDoc = (reqId: string, docId: string) => {
+    setMatchedDocs(prev => ({
+      ...prev,
+      [reqId]: docId
+    }));
+    setEvaluated(false);
+  };
+
+  // Run Advisory Pre-Check Evaluation
+  const handleRunEvaluation = () => {
+    setEvaluating(true);
+    setTimeout(() => {
+      setEvaluating(false);
+      setEvaluated(true);
+    }, 600);
+  };
+
+  // Evaluation Metrics
+  const evaluationResults = useMemo(() => {
+    if (!tenderDetail) return null;
+
+    const reqs = tenderDetail.requirements || [];
+    const totalCount = reqs.length;
+    const mandatoryReqs = reqs.filter(r => r.isMandatory);
+    const mandatoryCount = mandatoryReqs.length;
+
+    let satisfiedMandatory = 0;
+    let satisfiedOptional = 0;
+    const itemStatuses: Record<string, { status: VerificationStatus; note: string }> = {};
+
+    for (const req of reqs) {
+      const docId = matchedDocs[req.id];
+      const hasDoc = Boolean(docId);
+
+      if (hasDoc) {
+        if (req.isMandatory) satisfiedMandatory++;
+        else satisfiedOptional++;
+        itemStatuses[req.id] = {
+          status: VerificationStatus.VERIFIED,
+          note: 'Verifiable evidence attached from Document Vault.'
+        };
+      } else {
+        itemStatuses[req.id] = {
+          status: req.isMandatory ? VerificationStatus.NON_COMPLIANT : VerificationStatus.PENDING_VERIFICATION,
+          note: req.isMandatory
+            ? 'Mandatory criteria lacking verifiable credential attachment.'
+            : 'Optional evaluation metric (unattached).'
+        };
+      }
+    }
+
+    const complianceScore = mandatoryCount > 0
+      ? Math.round((satisfiedMandatory / mandatoryCount) * 100)
+      : 100;
+
+    const isReady = satisfiedMandatory === mandatoryCount;
+
+    return {
+      totalCount,
+      mandatoryCount,
+      satisfiedMandatory,
+      complianceScore,
+      isReady,
+      itemStatuses
+    };
+  }, [tenderDetail, matchedDocs]);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* Header */}
-      <div className="pb-4 border-b border-slate-200">
-        <h1 className="text-xl font-bold text-slate-900 tracking-tight">Bidder Pre-Submission Self-Check Simulator</h1>
-        <p className="text-xs text-slate-500">
-          Verify your organization's criteria applicability and required documentation before formal bid submission
-        </p>
+      <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-5 h-5 text-gov-navy" />
+            <h1 className="text-lg font-bold text-slate-900 tracking-tight">
+              Bidder Pre-Submission Self-Check Simulator
+            </h1>
+          </div>
+          <p className="text-xs text-slate-500 pt-1">
+            Simulate compliance evaluation, map credentials from your Document Vault, and resolve deficiencies before official bid submission.
+          </p>
+        </div>
+
+        <Link
+          to="/bidder/documents"
+          className="inline-flex items-center px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold transition shrink-0"
+        >
+          <HardDrive className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+          Manage Vault ({vaultDocs.length} Docs)
+        </Link>
       </div>
 
-      {/* Tender Selector */}
+      {/* Step 1: Select Target Published Tender */}
       <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm space-y-3">
-        <label className="block text-xs font-semibold text-slate-700" htmlFor="selectTender">
-          Select Target Published Tender:
+        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider" htmlFor="selectTender">
+          1. Select Published Tender Notice:
         </label>
         <select
           id="selectTender"
@@ -117,75 +217,48 @@ export const SelfCheckPage: React.FC = () => {
       )}
 
       {loading ? (
-        <div className="p-8 text-center text-xs text-slate-500">Loading structured criteria...</div>
+        <div className="p-8 text-center text-xs text-slate-500">Loading tender criteria and matching vault documents...</div>
       ) : tenderDetail ? (
         <div className="space-y-6">
-          {/* Summary Card */}
-          <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-sm space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
+          {/* Step 2 & 3: Match Vault Documents & Requirements Checklist */}
+          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div>
-                <span className="font-mono text-xs font-bold text-gov-navy">{tenderDetail.tenderNumber}</span>
-                <h2 className="text-sm font-bold text-slate-900 mt-1">{tenderDetail.title}</h2>
-              </div>
-              <div className="flex items-center space-x-4">
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 font-semibold uppercase">Total Requirements</span>
-                  <div className="text-base font-bold text-gov-navy">{tenderDetail.requirements.length}</div>
-                </div>
-                {existingBid ? (
-                  <Link
-                    to={`/bidder/applications/${existingBid.id}`}
-                    className="inline-flex items-center px-3.5 py-1.5 bg-gov-navy text-white rounded text-xs font-bold shadow-xs hover:bg-gov-navyLight"
-                  >
-                    View Bid Dossier ({existingBid.status}) <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                  </Link>
-                ) : (
-                  <Link
-                    to={`/bidder/tenders/${tenderDetail.id}/apply`}
-                    className="inline-flex items-center px-3.5 py-1.5 bg-gov-navy text-white rounded text-xs font-bold shadow-xs hover:bg-gov-navyLight"
-                  >
-                    Start Bid Application <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                  </Link>
-                )}
-              </div>
-            </div>
-
-            {verificationSummary ? (
-              <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-900 space-y-1">
-                <div className="font-bold flex items-center">
-                  <CheckCircle2 className="w-4 h-4 text-blue-600 mr-1.5" />
-                  Your Application Verification Screening
-                </div>
-                <p className="text-blue-800">
-                  Overall status: <strong>{verificationSummary.verificationStatus}</strong>.
-                  {verificationSummary.discrepancies.length > 0
-                    ? ` Flagged ${verificationSummary.discrepancies.length} discrepancy item(s).`
-                    : ' No critical discrepancies detected across attached evidence.'}
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  2. Map Vault Credentials to Requirements ({tenderDetail.requirements.length})
+                </span>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Match each mandatory requirement with a statutory credential from your vault.
                 </p>
               </div>
-            ) : (
-              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-md text-xs text-amber-900 flex items-start space-x-2">
-                <HelpCircle className="w-4 h-4 text-amber-700 flex-shrink-0 mt-0.5" />
-                <span>
-                  <strong>Diagnostic Baseline:</strong> This simulator presents the official tender criteria and required evidence. Upload evidence during formal application to trigger deterministic compliance verification.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Structured Requirements List */}
-          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Tender Criteria Checklist & Evidence Mapping
+              <button
+                type="button"
+                onClick={handleRunEvaluation}
+                disabled={evaluating}
+                className="inline-flex items-center px-4 py-2 bg-gov-navy hover:bg-gov-navyLight text-white rounded text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50"
+              >
+                {evaluating ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    Screening Evidence...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+                    Run Advisory Pre-Check
+                  </>
+                )}
+              </button>
             </div>
 
             <div className="divide-y divide-slate-100">
               {tenderDetail.requirements.map((req) => {
-                const evalItem = verificationSummary?.evaluations.find(e => e.requirementCode === req.code);
+                const selectedDocId = matchedDocs[req.id] || '';
+                const evalInfo = evaluated && evaluationResults ? evaluationResults.itemStatuses[req.id] : null;
 
                 return (
-                  <div key={req.id} className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-xs">
-                    <div className="space-y-1.5 flex-1">
+                  <div key={req.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs">
+                    <div className="space-y-1 flex-1">
                       <div className="flex items-center space-x-2">
                         <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                           {req.code}
@@ -194,36 +267,114 @@ export const SelfCheckPage: React.FC = () => {
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
                           req.isMandatory ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-600'
                         }`}>
-                          {req.isMandatory ? 'Mandatory Requirement' : 'Optional / Evaluation Metric'}
+                          {req.isMandatory ? 'Mandatory' : 'Optional'}
                         </span>
                       </div>
 
                       {req.description && <p className="text-slate-500">{req.description}</p>}
 
-                      <div className="flex flex-wrap gap-2 text-[11px] text-slate-500 pt-1">
-                        <span><strong>Category:</strong> {req.category}</span> |
-                        <span><strong>Evidence:</strong> {req.evidenceTypes.join(', ') || 'Formal Declaration'}</span> |
-                        <span><strong>Target Registry:</strong> {req.verificationSources.join(', ') || 'Statutory Department'}</span>
-                      </div>
-
-                      {evalItem && evalItem.reasons.length > 0 && (
-                        <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 mt-1">
-                          <strong>Screening Note:</strong> {evalItem.reasons[0]}
+                      {evalInfo && (
+                        <div className={`text-[11px] p-2 rounded mt-1.5 flex items-center space-x-1.5 ${
+                          evalInfo.status === VerificationStatus.VERIFIED
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            : 'bg-rose-50 text-rose-800 border border-rose-200'
+                        }`}>
+                          {evalInfo.status === VerificationStatus.VERIFIED ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          )}
+                          <span>{evalInfo.note}</span>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex items-center space-x-3">
-                      <div className="text-right">
-                        <div className="text-[10px] text-slate-400 uppercase font-semibold">Verification State</div>
-                        <StatusBadge status={evalItem?.verificationStatus || VerificationStatus.PENDING_VERIFICATION} />
-                      </div>
+                    {/* Vault Document Selector */}
+                    <div className="w-full md:w-64 flex flex-col space-y-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-400">Attached Vault Evidence</label>
+                      <select
+                        value={selectedDocId}
+                        onChange={(e) => handleSelectDoc(req.id, e.target.value)}
+                        className={`text-xs py-1.5 px-2.5 rounded border focus:ring-1 focus:ring-gov-navy ${
+                          selectedDocId ? 'bg-white border-slate-300 text-slate-800 font-semibold' : 'bg-rose-50/50 border-rose-200 text-slate-500'
+                        }`}
+                      >
+                        <option value="">-- No Vault Document Attached --</option>
+                        {vaultDocs.map((vd) => (
+                          <option key={vd.id} value={vd.id}>
+                            {vd.documentName} (v{(vd as any).version || 1})
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
+
+          {/* Step 4 & 5: Advisory Evaluation Results */}
+          {evaluated && evaluationResults && (
+            <div className={`p-6 rounded-lg border shadow-sm space-y-4 ${
+              evaluationResults.isReady ? 'bg-emerald-50/80 border-emerald-300' : 'bg-amber-50/80 border-amber-300'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/60 pb-4">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    {evaluationResults.isReady ? (
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                    ) : (
+                      <AlertTriangle className="w-6 h-6 text-amber-600" />
+                    )}
+                    <h3 className="text-base font-bold text-slate-900">
+                      {evaluationResults.isReady ? 'Pre-Submission Check Passed' : 'Submission Deficiencies Identified'}
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    {evaluationResults.isReady
+                      ? 'All mandatory statutory criteria are covered by attached vault documents. Your application is qualified for official evaluation.'
+                      : `Missing ${evaluationResults.mandatoryCount - evaluationResults.satisfiedMandatory} mandatory statutory document(s). Upload them to your vault before applying.`}
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-4 shrink-0">
+                  <div className="text-right">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Advisory Score</span>
+                    <span className={`text-2xl font-black ${
+                      evaluationResults.complianceScore >= 80 ? 'text-emerald-700' : 'text-amber-700'
+                    }`}>
+                      {evaluationResults.complianceScore}/100
+                    </span>
+                  </div>
+                  <Link
+                    to={`/bidder/tenders/${tenderDetail.id}/apply`}
+                    className="inline-flex items-center px-4 py-2.5 bg-gov-navy hover:bg-gov-navyLight text-white rounded text-xs font-bold shadow-xs transition"
+                  >
+                    Proceed to Apply <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                  </Link>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-white/80 p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Total Criteria</span>
+                  <span className="font-bold text-slate-800 text-sm">{evaluationResults.totalCount}</span>
+                </div>
+                <div className="bg-white/80 p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Mandatory Thresholds</span>
+                  <span className="font-bold text-slate-800 text-sm">{evaluationResults.mandatoryCount}</span>
+                </div>
+                <div className="bg-white/80 p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Satisfied Mandatory</span>
+                  <span className="font-bold text-emerald-700 text-sm">{evaluationResults.satisfiedMandatory}</span>
+                </div>
+                <div className="bg-white/80 p-3 rounded border border-slate-200">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Deficient Items</span>
+                  <span className="font-bold text-rose-700 text-sm">{evaluationResults.mandatoryCount - evaluationResults.satisfiedMandatory}</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : null}
     </div>

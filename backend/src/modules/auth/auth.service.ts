@@ -27,6 +27,10 @@ export class AuthService {
     const publicClient = getSupabasePublicClient();
     const adminClient = getSupabaseAdminClient();
 
+    // Security Enforcement: Public registration is strictly restricted to BIDDER.
+    // Privileged roles (OFFICER, AUDITOR, ADMIN) can only be provisioned by authorized administrators.
+    const assignedRole = UserRole.BIDDER;
+
     // 1. Create auth user in Supabase Auth
     const { data: authData, error: authError } = await publicClient.auth.signUp({
       email: payload.email,
@@ -34,7 +38,7 @@ export class AuthService {
       options: {
         data: {
           full_name: payload.fullName,
-          role: payload.role
+          role: assignedRole
         }
       }
     });
@@ -57,7 +61,7 @@ export class AuthService {
         id: userId,
         email: payload.email,
         full_name: payload.fullName,
-        role: payload.role,
+        role: assignedRole,
         is_active: true
       });
 
@@ -73,8 +77,8 @@ export class AuthService {
     // 3. If organization name provided, register organization and membership
     let orgSummary = null;
     if (payload.organizationName) {
-      const orgType = payload.organizationType || (payload.role === UserRole.OFFICER ? OrganizationType.GOVERNMENT_ENTITY : OrganizationType.BIDDER_ENTITY);
-      const membershipRole = payload.role === UserRole.OFFICER ? MembershipRole.PRIMARY_OFFICER : MembershipRole.AUTHORIZED_REPRESENTATIVE;
+      const orgType = OrganizationType.BIDDER_ENTITY;
+      const membershipRole = MembershipRole.AUTHORIZED_REPRESENTATIVE;
 
       const { data: orgData, error: orgError } = await adminClient
         .from('organizations')

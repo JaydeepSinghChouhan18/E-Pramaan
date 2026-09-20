@@ -37,6 +37,11 @@ export const AwardsPage: React.FC = () => {
   const [confirmModalOpen, setConfirmModalOpen] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
+  // Award Revocation state
+  const [revokeModalOpen, setRevokeModalOpen] = useState<boolean>(false);
+  const [revokeJustification, setRevokeJustification] = useState<string>('');
+  const [submittingRevoke, setSubmittingRevoke] = useState<boolean>(false);
+
   // Investigation creation modal
   const [investigationTargetBid, setInvestigationTargetBid] = useState<BidComparisonItem | null>(null);
   const [invTitle, setInvTitle] = useState<string>('');
@@ -158,6 +163,28 @@ export const AwardsPage: React.FC = () => {
       setError(err.response?.data?.message || err.message || 'Failed to record award decision');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleRevokeAward = async () => {
+    if (!revokeJustification.trim() || revokeJustification.trim().length < 20) {
+      setError('Statutory requirement: Please enter a detailed justification of at least 20 characters before revoking a finalized award.');
+      return;
+    }
+
+    try {
+      setSubmittingRevoke(true);
+      setError(null);
+      await AwardsApi.revokeAwardDecision(selectedTenderId, revokeJustification);
+      setActionSuccess('Finalized award has been successfully revoked and the tender reopened for re-evaluation.');
+      setRevokeModalOpen(false);
+      setRevokeJustification('');
+      await loadTenders();
+      await loadComparativeBids(selectedTenderId);
+    } catch (err: any) {
+      setError(err.response?.data?.message || err.message || 'Failed to revoke award decision');
+    } finally {
+      setSubmittingRevoke(false);
     }
   };
 
@@ -459,8 +486,60 @@ export const AwardsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Decision Formulation Workspace */}
-      {selectedBid && (
+      {/* Finalized & Sealed Award Overview */}
+      {existingDecision?.decisionStatus === AwardDecisionStatus.APPROVED && (
+        <div className="bg-emerald-50/80 border-2 border-emerald-300 rounded-lg p-6 space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-200 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-inner">
+                <Award className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-emerald-950 flex items-center gap-2">
+                  Contract Award Finalized & Legally Sealed
+                  <span className="text-[10px] bg-emerald-700 text-white font-mono px-2 py-0.5 rounded font-bold uppercase">Approved</span>
+                </h2>
+                <p className="text-xs text-emerald-800">
+                  Awarded Entity: <span className="font-bold text-slate-900">{bids.find(b => b.bidId === existingDecision.selectedBidId)?.bidderOrganizationName || 'Selected Vendor'}</span>
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRevokeModalOpen(true)}
+              className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+            >
+              <AlertTriangle className="h-4 w-4" />
+              Revoke & Reopen Award
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs pt-1">
+            <div className="bg-white p-3.5 rounded border border-emerald-200 space-y-1">
+              <span className="font-bold text-slate-800 block text-[11px] uppercase tracking-wider">Officer Determination Rationale</span>
+              <p className="text-slate-700 whitespace-pre-wrap">{existingDecision.decisionReason || 'Approved as qualifying responsive bidder.'}</p>
+            </div>
+            {existingDecision.justificationText ? (
+              <div className="bg-white p-3.5 rounded border border-amber-200 space-y-1">
+                <span className="font-bold text-amber-900 block text-[11px] uppercase tracking-wider">CVC / CAG Exception Justification</span>
+                <p className="text-slate-700 whitespace-pre-wrap">{existingDecision.justificationText}</p>
+              </div>
+            ) : (
+              <div className="bg-white p-3.5 rounded border border-slate-200 space-y-1">
+                <span className="font-bold text-slate-500 block text-[11px] uppercase tracking-wider">Statutory Justification</span>
+                <p className="text-slate-500 italic">No exception profile detected; awarded strictly to highest ranking eligible bidder.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="text-[11px] text-emerald-900 font-medium italic pt-1">
+            Direct edits are locked under sovereign procurement guidelines. Reopening requires explicit revocation with mandatory justification.
+          </div>
+        </div>
+      )}
+
+      {/* Decision Formulation Workspace (Only when tender is not yet approved) */}
+      {existingDecision?.decisionStatus !== AwardDecisionStatus.APPROVED && selectedBid && (
         <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-6 space-y-6">
           <div className="flex items-center justify-between border-b border-slate-200 pb-4">
             <div>
@@ -701,6 +780,70 @@ export const AwardsPage: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Revoke / Reopen Award Modal */}
+      {revokeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2 text-rose-700">
+                <AlertTriangle className="h-5 w-5" />
+                <h3 className="font-bold text-slate-900">Revoke Contract Award & Reopen Tender</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRevokeModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800 space-y-1">
+              <span className="font-bold block">Statutory Procurement Warning:</span>
+              <p>
+                Revoking a sanctioned award will revert the tender status to <strong>TECHNICAL EVALUATION</strong>, unseal the award determination, and broadcast an official notification to all participating bidders.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-bold uppercase text-slate-700">
+                Mandatory Revocation Justification <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                required
+                rows={4}
+                value={revokeJustification}
+                onChange={(e) => setRevokeJustification(e.target.value)}
+                placeholder="State statutory, technical, or legal grounds for revoking this award (minimum 20 characters)..."
+                className="w-full border border-slate-300 rounded p-2.5 text-xs text-slate-800 focus:ring-rose-500 focus:border-rose-500"
+              />
+              <div className="text-[10px] text-slate-400 flex justify-between">
+                <span>Must be recorded in CVC/CAG statutory audit log.</span>
+                <span>{revokeJustification.trim().length}/20 chars min</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setRevokeModalOpen(false)}
+                className="px-3.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRevokeAward}
+                disabled={submittingRevoke || revokeJustification.trim().length < 20}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-rose-700 hover:bg-rose-800 rounded disabled:opacity-50 flex items-center gap-1.5 shadow"
+              >
+                {submittingRevoke ? 'Revoking Award...' : 'Confirm Revocation & Reopen'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

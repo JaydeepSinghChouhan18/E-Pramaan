@@ -10,6 +10,8 @@ interface AwardedTenderCard {
   winningBidAmount?: number | null;
   complianceScore?: number;
   awardedAt?: string;
+  decisionReason?: string;
+  isMyBidWinner?: boolean;
 }
 
 export const AllottedBidsPage: React.FC = () => {
@@ -32,16 +34,15 @@ export const AllottedBidsPage: React.FC = () => {
 
       for (const t of res.items || []) {
         try {
-          const comp = await AwardsApi.getComparativeBids(t.id);
-          const decision = comp.existing_decision;
-          const winningBid = comp.bids.find(b => b.bidId === decision?.selectedBidId);
-
+          const trans = await AwardsApi.getBidderTransparency(t.id);
           cards.push({
             tender: t,
-            winningBidderName: winningBid?.bidderOrganizationName || 'Awarded Vendor',
-            winningBidAmount: winningBid?.bidAmount,
-            complianceScore: decision?.selectedComplianceScore || winningBid?.complianceScore,
-            awardedAt: decision?.decidedAt
+            winningBidderName: trans?.winningBidderName || 'Awarded Vendor',
+            winningBidAmount: trans?.winningBidAmount,
+            complianceScore: trans?.complianceScore,
+            awardedAt: trans?.awardedAt,
+            decisionReason: trans?.decisionReason,
+            isMyBidWinner: trans?.isMyBidWinner
           });
         } catch {
           // If public award summary not available, display tender info

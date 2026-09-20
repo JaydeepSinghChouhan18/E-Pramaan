@@ -370,6 +370,7 @@ export interface BidDocument {
   requirementName?: string;
   category?: RequirementCategory;
   isMandatory?: boolean;
+  version?: number;
 }
 
 export interface Bid {

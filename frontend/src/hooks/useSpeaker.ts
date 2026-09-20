@@ -34,7 +34,7 @@ export function useSpeaker(): UseSpeakerReturn {
   const speak = useCallback(
     (text: string, langCode: string = 'en') => {
       if (!isSupported) {
-        alert('Web Speech API is not supported on this device/browser.');
+        console.warn('[useSpeaker] Web Speech API is not supported on this device/browser.');
         return;
       }
 

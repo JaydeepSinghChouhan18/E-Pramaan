@@ -78,4 +78,20 @@ export class AwardsController {
       next(err);
     }
   }
+
+  static async revokeAwardDecision(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const { tenderId } = req.params;
+      const { justification } = req.body;
+      const data = await AwardsService.revokeAwardDecision(user, tenderId, justification);
+      res.json({
+        success: true,
+        message: data.message,
+        data
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
 }

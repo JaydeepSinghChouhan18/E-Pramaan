@@ -33,6 +33,11 @@ import { CompanyProfilePage } from '../pages/bidder/CompanyProfilePage';
 import { SelfCheckPage } from '../pages/bidder/SelfCheckPage';
 import { BidApplicationPage } from '../pages/bidder/BidApplicationPage';
 import { AllottedBidsPage } from '../pages/bidder/AllottedBidsPage';
+import { MyAwardedTendersPage } from '../pages/bidder/MyAwardedTendersPage';
+
+// Admin & Auditor Dashboards
+import { AdminDashboard } from '../pages/admin/AdminDashboard';
+import { AuditorDashboard } from '../pages/auditor/AuditorDashboard';
 
 // Notifications Page
 import { NotificationsPage } from '../pages/notifications/NotificationsPage';
@@ -42,7 +47,16 @@ const RootRedirect: React.FC = () => {
   const { activeRole } = useRoleContext();
 
   const effectiveRole = user?.role || activeRole;
-  return <Navigate to={effectiveRole === UserRole.BIDDER ? '/bidder/dashboard' : '/officer/dashboard'} replace />;
+  if (effectiveRole === UserRole.ADMIN) {
+    return <Navigate to="/admin/dashboard" replace />;
+  }
+  if (effectiveRole === UserRole.AUDITOR) {
+    return <Navigate to="/auditor/dashboard" replace />;
+  }
+  if (effectiveRole === UserRole.OFFICER) {
+    return <Navigate to="/officer/dashboard" replace />;
+  }
+  return <Navigate to="/bidder/dashboard" replace />;
 };
 
 export const AppRouter: React.FC = () => {
@@ -55,6 +69,42 @@ export const AppRouter: React.FC = () => {
       {/* Application Shell */}
       <Route path="/" element={<AppLayout />}>
         <Route index element={<RootRedirect />} />
+
+        {/* Dedicated Admin Routes */}
+        <Route
+          path="admin"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.ADMIN]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="admin/dashboard"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.ADMIN]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Dedicated Auditor Routes */}
+        <Route
+          path="auditor"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.AUDITOR, UserRole.ADMIN]}>
+              <AuditorDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="auditor/dashboard"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.AUDITOR, UserRole.ADMIN]}>
+              <AuditorDashboard />
+            </ProtectedRoute>
+          }
+        />
 
         {/* Officer / Auditor / Admin Routes */}
         <Route
@@ -94,6 +144,14 @@ export const AppRouter: React.FC = () => {
           element={
             <ProtectedRoute allowedRoles={[UserRole.OFFICER, UserRole.ADMIN, UserRole.AUDITOR]}>
               <TenderDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="officer/tenders/:id/edit"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.OFFICER, UserRole.ADMIN]}>
+              <CreateTenderPage />
             </ProtectedRoute>
           }
         />
@@ -225,6 +283,14 @@ export const AppRouter: React.FC = () => {
           element={
             <ProtectedRoute allowedRoles={[UserRole.BIDDER, UserRole.ADMIN]}>
               <AllottedBidsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="bidder/my-awards"
+          element={
+            <ProtectedRoute allowedRoles={[UserRole.BIDDER, UserRole.ADMIN]}>
+              <MyAwardedTendersPage />
             </ProtectedRoute>
           }
         />

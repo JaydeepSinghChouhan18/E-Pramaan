@@ -20,12 +20,18 @@ declare global {
  */
 export async function requireAuthenticatedUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
+  let token: string | undefined;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.query.token && typeof req.query.token === 'string') {
+    token = req.query.token;
+  }
+
+  if (!token) {
     return next(new AppError('Authentication required. Missing or malformed Bearer token.', 401, 'UNAUTHENTICATED'));
   }
 
-  const token = authHeader.split(' ')[1];
   req.authToken = token;
 
   if (!config.hasSupabaseConfigured()) {

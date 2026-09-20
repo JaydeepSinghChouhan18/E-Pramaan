@@ -48,6 +48,7 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
   const [selectedTenderId, setSelectedTenderId] = useState<string>(initialTenderId);
   const [assistantLanguage, setAssistantLanguage] = useState<string>(language || 'en');
   const [isListening, setIsListening] = useState<boolean>(false);
+  const [micState, setMicState] = useState<'OFF' | 'LISTENING' | 'PROCESSING' | 'ERROR'>('OFF');
   const recognitionRef = useRef<any>(null);
   const selectedBidId = initialBidId;
 
@@ -172,6 +173,7 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
         recognitionRef.current.stop();
       }
       setIsListening(false);
+      setMicState('OFF');
       return;
     }
 
@@ -199,9 +201,11 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
 
       recognition.onstart = () => {
         setIsListening(true);
+        setMicState('LISTENING');
       };
 
       recognition.onresult = (event: any) => {
+        setMicState('PROCESSING');
         const transcript = event.results[0][0].transcript;
         if (transcript) {
           setInputPrompt((prev) => (prev ? `${prev} ${transcript}` : transcript));
@@ -210,15 +214,20 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
 
       recognition.onerror = () => {
         setIsListening(false);
+        setMicState('ERROR');
+        setTimeout(() => setMicState('OFF'), 3000);
       };
 
       recognition.onend = () => {
         setIsListening(false);
+        setMicState('OFF');
       };
 
       recognition.start();
     } catch (err) {
       setIsListening(false);
+      setMicState('ERROR');
+      setTimeout(() => setMicState('OFF'), 3000);
     }
   };
 
@@ -305,17 +314,38 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
                 Language: {assistantLanguage.toUpperCase()}
               </span>
             </div>
-            {speakerSupported && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => isSpeaking && stopSpeaker()}
-                className={`text-[11px] px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
-                  isSpeaking ? 'bg-amber-100 text-amber-800 animate-pulse' : 'text-slate-500 hover:text-slate-800'
-                }`}
+                type="button"
+                onClick={() => {
+                  setMessages([
+                    {
+                      id: `welcome-${Date.now()}`,
+                      role: 'assistant',
+                      content: effectiveRole === UserRole.OFFICER
+                        ? 'Welcome Officer. Conversation reset. Ask me about requirement applicability, compliance evidence, or discrepancy flags from verified records.'
+                        : 'Welcome Bidder. Conversation reset. Select a published tender to review requirements, checklists, and pre-submission guidance.',
+                      timestamp: new Date().toLocaleTimeString()
+                    }
+                  ]);
+                }}
+                className="text-[11px] px-2 py-1 rounded text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 font-semibold transition flex items-center gap-1 border border-slate-200 bg-white"
+                title="Start a new conversation and clear chat history"
               >
-                {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                {isSpeaking ? t('action.speaking') : t('action.listen')}
+                <RefreshCw className="h-3 w-3" /> New Chat
               </button>
-            )}
+              {speakerSupported && (
+                <button
+                  onClick={() => isSpeaking && stopSpeaker()}
+                  className={`text-[11px] px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
+                    isSpeaking ? 'bg-amber-100 text-amber-800 animate-pulse' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                  {isSpeaking ? t('action.speaking') : t('action.listen')}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Message Thread */}
@@ -417,19 +447,43 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({ forcedRole }) 
               disabled={loadingResponse}
               className="flex-1 text-sm border border-slate-300 rounded-md p-2.5 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
             />
-            {/* Speech to text microphone button */}
-            <button
-              type="button"
-              onClick={toggleListening}
-              className={`p-2.5 rounded-md border text-xs font-bold transition flex items-center justify-center ${
-                isListening
-                  ? 'bg-rose-600 text-white border-rose-700 animate-pulse'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
-              }`}
-              title={isListening ? "Listening... click to stop" : "Speak question in chosen language"}
-            >
-              {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </button>
+            {/* Speech to text microphone button & visible state badge */}
+            <div className="flex items-center gap-1.5">
+              {micState === 'LISTENING' && (
+                <span className="text-[10px] bg-rose-100 text-rose-700 px-2 py-1 rounded font-bold animate-pulse flex items-center gap-1 border border-rose-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600" />
+                  LISTENING
+                </span>
+              )}
+              {micState === 'PROCESSING' && (
+                <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded font-bold flex items-center gap-1 border border-amber-200">
+                  <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                  PROCESSING
+                </span>
+              )}
+              {micState === 'ERROR' && (
+                <span className="text-[10px] bg-rose-100 text-rose-800 px-2 py-1 rounded font-bold border border-rose-200">
+                  MIC ERROR
+                </span>
+              )}
+              {micState === 'OFF' && (
+                <span className="text-[10px] text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-200 hidden sm:inline-block">
+                  MIC OFF
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={toggleListening}
+                className={`p-2.5 rounded-md border text-xs font-bold transition flex items-center justify-center ${
+                  isListening
+                    ? 'bg-rose-600 text-white border-rose-700 animate-pulse shadow-sm'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                }`}
+                title={isListening ? "Listening... click to stop" : "Speak question in chosen language"}
+              >
+                {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </button>
+            </div>
             <button
               type="submit"
               disabled={loadingResponse || !inputPrompt.trim()}

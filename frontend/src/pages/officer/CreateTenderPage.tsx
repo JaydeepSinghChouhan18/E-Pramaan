@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { FilePlus, CheckCircle2, AlertCircle, Trash2, ArrowRight, ArrowLeft, BookOpen, Upload } from 'lucide-react';
 import { RequirementCategory, RequirementType, CreateRequirementPayload } from '@e-pramaan/shared';
 import { TendersApi } from '../../services/tenders';
@@ -9,6 +9,8 @@ import { REQUIREMENT_TEMPLATES, RequirementTemplatePreset } from '../../utils/re
 export const CreateTenderPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { id } = useParams<{ id?: string }>();
+  const isEditMode = Boolean(id);
 
   // Multi-step workflow state: 1: Basic Info, 2: Timeline, 3: Eligibility, 4: Requirements, 5: Review & Publish
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -38,6 +40,43 @@ export const CreateTenderPage: React.FC = () => {
     REQUIREMENT_TEMPLATES[2].defaultPayload,
     REQUIREMENT_TEMPLATES[3].defaultPayload
   ]);
+
+  // Load existing tender data if in edit mode
+  useEffect(() => {
+    if (!id) return;
+    const fetchTender = async () => {
+      try {
+        const t = await TendersApi.getTenderById(id);
+        setTenderNumber(t.tenderNumber);
+        setTitle(t.title);
+        setDescription(t.description || '');
+        if (t.tenderDocument) setTenderDocument(t.tenderDocument);
+        if (t.estimatedValue) setEstimatedValue(String(t.estimatedValue));
+        if (t.currency) setCurrency(t.currency);
+        if (t.submissionDeadline) setSubmissionDeadline(new Date(t.submissionDeadline).toISOString().slice(0, 16));
+        if (t.openingDate) setOpeningDate(new Date(t.openingDate).toISOString().slice(0, 16));
+        if (t.minimumCompanyAgeYears) setMinimumCompanyAge(String(t.minimumCompanyAgeYears));
+        if (t.requirements && t.requirements.length > 0) {
+          setRequirements(t.requirements.map(r => ({
+            code: r.code,
+            name: (r as any).title || r.name || '',
+            description: r.description || '',
+            category: r.category,
+            requirementType: r.requirementType,
+            isMandatory: r.isMandatory,
+            isApplicable: r.isApplicable,
+            weight: r.weight,
+            configuration: r.configuration || {},
+            evidenceTypes: r.evidenceTypes || ['DOCUMENT_UPLOAD'],
+            verificationSources: r.verificationSources || []
+          })));
+        }
+      } catch (err: any) {
+        setError(err.message || 'Failed to load existing tender details');
+      }
+    };
+    fetchTender();
+  }, [id]);
 
   // Drawer / Template selector modal state
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -133,6 +172,27 @@ export const CreateTenderPage: React.FC = () => {
         throw new Error('At least one requirement is required to publish a tender.');
       }
 
+      if (isEditMode && id) {
+        // Update existing tender
+        await TendersApi.updateTender(id, {
+          title,
+          description,
+          tenderDocument: tenderDocument || undefined,
+          submissionDeadline: new Date(submissionDeadline).toISOString(),
+          openingDate: openingDate ? new Date(openingDate).toISOString() : undefined,
+          estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
+          currency,
+          minimumCompanyAgeYears: minimumCompanyAge ? parseInt(minimumCompanyAge, 10) : undefined
+        });
+
+        if (shouldPublish) {
+          await TendersApi.publishTender(id);
+        }
+
+        navigate(`/officer/tenders/${id}`);
+        return;
+      }
+
       // 1. Create tender in DRAFT
       const tender = await TendersApi.createTender({
         tenderNumber,
@@ -182,8 +242,14 @@ export const CreateTenderPage: React.FC = () => {
             <FilePlus className="w-6 h-6 text-gov-navy" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Create Procurement Tender</h1>
-            <p className="text-xs text-slate-500">Formulate official government procurement scope, timeline and structured rules</p>
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+              {isEditMode ? 'Edit Draft Procurement Tender' : 'Create Procurement Tender'}
+            </h1>
+            <p className="text-xs text-slate-500">
+              {isEditMode
+                ? 'Modify official tender draft scope, timeline and statutory rules before publishing'
+                : 'Formulate official government procurement scope, timeline and structured rules'}
+            </p>
           </div>
         </div>
         <div className="mt-3 sm:mt-0 flex space-x-2">
@@ -191,9 +257,9 @@ export const CreateTenderPage: React.FC = () => {
             type="button"
             disabled={isSubmitting}
             onClick={() => handleSaveDraftOrPublish(false)}
-            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 shadow-sm"
+            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 shadow-sm cursor-pointer"
           >
-            Save as Draft
+            {isEditMode ? 'Update Draft' : 'Save as Draft'}
           </button>
         </div>
       </div>

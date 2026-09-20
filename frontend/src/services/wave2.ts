@@ -109,6 +109,12 @@ export class AwardsApi {
     const res = await api.get<any>(`/awards/tender/${tenderId}/transparency`);
     return res.data;
   }
+
+  static async revokeAwardDecision(tenderId: string, justification: string): Promise<{ message: string; tenderId: string }> {
+    const res = await api.post<{ message: string; tenderId: string }>(`/awards/tenders/${tenderId}/revoke`, { justification });
+    if (!res.data) throw new Error(res.message || 'Failed to revoke award decision');
+    return res.data;
+  }
 }
 
 export class AuditApi {

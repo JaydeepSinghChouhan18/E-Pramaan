@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Shield, Lock, Mail, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { UserRole } from '@e-pramaan/shared';
 
 
 export const LoginPage: React.FC = () => {
@@ -21,13 +22,25 @@ export const LoginPage: React.FC = () => {
 
     try {
       const loggedUser = await login({ email, password });
+      const role = loggedUser?.role;
+      const defaultDest = role === UserRole.BIDDER ? '/bidder/dashboard' : '/officer/dashboard';
       const from = (location.state as any)?.from?.pathname;
-      if (from) {
-        navigate(from, { replace: true });
-      } else {
-        const dest = loggedUser?.role === 'BIDDER' ? '/bidder/dashboard' : '/officer/dashboard';
-        navigate(dest, { replace: true });
+
+      // Validate return path belongs to authenticated user's actual database role
+      let targetDest = defaultDest;
+      if (from && typeof from === 'string' && from.startsWith('/')) {
+        if (role === UserRole.OFFICER || role === UserRole.ADMIN || role === UserRole.AUDITOR) {
+          if (from.startsWith('/officer') || from === '/help' || from === '/notifications') {
+            targetDest = from;
+          }
+        } else if (role === UserRole.BIDDER) {
+          if (from.startsWith('/bidder') || from === '/help' || from === '/notifications') {
+            targetDest = from;
+          }
+        }
       }
+
+      navigate(targetDest, { replace: true });
     } catch (err: any) {
       setLocalError(err.message || 'Authentication failed. Verify credentials.');
     } finally {

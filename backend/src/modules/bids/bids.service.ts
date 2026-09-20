@@ -455,7 +455,7 @@ export class BidsService {
     // 3. Compute real SHA-256 hash from file bytes
     const sha256Hash = DocumentIntelligenceService.computeSha256(file.buffer);
 
-    // 4. Save file to disk
+    // 4. Save file to disk & Supabase Storage
     const safeDocName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const filename = `${bidId}_${req.id}_${Date.now()}_${safeDocName}`;
     const uploadDir = path.resolve(process.cwd(), 'uploads', 'documents');
@@ -465,6 +465,28 @@ export class BidsService {
     const fullFilePath = path.join(uploadDir, filename);
     fs.writeFileSync(fullFilePath, file.buffer);
     const storagePath = `uploads/documents/${filename}`;
+
+    // Upload to Supabase Storage bucket if configured
+    if (config.hasSupabaseConfigured()) {
+      try {
+        await admin.storage
+          .from('bid_documents')
+          .upload(storagePath, file.buffer, {
+            contentType: file.mimetype,
+            upsert: true
+          });
+      } catch (storageErr) {
+        console.warn('[uploadDocument] Supabase Storage upload note:', storageErr);
+      }
+    }
+
+    // Determine version (check existing versions for this requirement on bid)
+    const { count } = await admin
+      .from('bid_documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('bid_id', bidId)
+      .eq('tender_requirement_id', tenderRequirementId);
+    const docVersion = (count || 0) + 1;
 
     // 5. Run Document Intelligence extraction
     const extraction = await DocumentIntelligenceService.processDocumentBuffer(
@@ -477,6 +499,7 @@ export class BidsService {
     const mergedMetadata: Record<string, unknown> = {
       ...(metadata || {}),
       ...extraction.fields,
+      version: docVersion,
       extractionProvider: extraction.provider,
       rawSnippet: extraction.rawSnippet,
       originalName: file.originalname
@@ -540,7 +563,7 @@ export class BidsService {
     user: UserProfile,
     bidId: string,
     documentId: string
-  ): Promise<{ absolutePath: string; documentName: string; mimeType: string }> {
+  ): Promise<{ absolutePath: string; documentName: string; mimeType: string; sha256Hash?: string; isIntegrityVerified?: boolean }> {
     const admin = getSupabaseAdminClient();
 
     const { data: doc, error: docErr } = await admin
@@ -550,6 +573,7 @@ export class BidsService {
         document_name,
         storage_path,
         mime_type,
+        sha256_hash,
         bid:bids (
           id,
           bidder_organization_id,
@@ -586,13 +610,92 @@ export class BidsService {
       : path.resolve(process.cwd(), doc.storage_path);
 
     if (!fs.existsSync(resolvedPath)) {
-      throw new AppError('Physical document file not found on disk storage.', 404, 'FILE_NOT_FOUND');
+      if (config.hasSupabaseConfigured()) {
+        try {
+          const { data: fileBlob, error: storageErr } = await admin.storage
+            .from('bid_documents')
+            .download(doc.storage_path);
+          if (!storageErr && fileBlob) {
+            const arrayBuffer = await fileBlob.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const dir = path.dirname(resolvedPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(resolvedPath, buffer);
+          }
+        } catch (downloadErr) {
+          console.warn('[getDocumentFile] Supabase Storage download notice:', downloadErr);
+        }
+      }
     }
+
+    if (!fs.existsSync(resolvedPath)) {
+      throw new AppError('Physical document file not found on storage.', 404, 'FILE_NOT_FOUND');
+    }
+
+    const fileBytes = fs.readFileSync(resolvedPath);
+    const computedHash = DocumentIntelligenceService.computeSha256(fileBytes);
+    const isIntegrityVerified = doc.sha256_hash ? doc.sha256_hash === computedHash : true;
 
     return {
       absolutePath: resolvedPath,
       documentName: doc.document_name,
-      mimeType: doc.mime_type
+      mimeType: doc.mime_type,
+      sha256Hash: doc.sha256_hash || computedHash,
+      isIntegrityVerified
+    };
+  }
+
+  /**
+   * Get secure view information and signed URL for a bid document.
+   */
+  static async getDocumentViewUrl(user: UserProfile, bidId: string, documentId: string) {
+    const admin = getSupabaseAdminClient();
+    const { data: doc, error } = await admin
+      .from('bid_documents')
+      .select('id, document_name, storage_path, mime_type, file_size, sha256_hash, verification_status, metadata, bid:bids(id, bidder_organization_id, tender:tenders(procuring_organization_id, created_by))')
+      .eq('id', documentId)
+      .eq('bid_id', bidId)
+      .maybeSingle();
+
+    if (error || !doc) {
+      throw new AppError('Document not found.', 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    const bid = Array.isArray(doc.bid) ? doc.bid[0] : doc.bid;
+    const tender = Array.isArray(bid?.tender) ? bid?.tender[0] : bid?.tender;
+    const isBidderOwner = user.organization?.id && bid?.bidder_organization_id === user.organization.id;
+    const isProcuringOfficer = user.role === UserRole.OFFICER && (
+      (user.organization?.id && tender?.procuring_organization_id === user.organization.id) ||
+      tender?.created_by === user.id
+    );
+    const isAdminOrAuditor = user.role === UserRole.ADMIN || user.role === UserRole.AUDITOR;
+
+    if (!isBidderOwner && !isProcuringOfficer && !isAdminOrAuditor) {
+      throw new AppError('You are not authorized to access this document.', 403, 'FORBIDDEN');
+    }
+
+    let signedUrl = `/api/v1/bids/${bidId}/documents/${documentId}/file`;
+    if (config.hasSupabaseConfigured()) {
+      try {
+        const { data: signedData } = await admin.storage
+          .from('bid_documents')
+          .createSignedUrl(doc.storage_path, 3600);
+        if (signedData?.signedUrl) {
+          signedUrl = signedData.signedUrl;
+        }
+      } catch {
+        // stream fallback
+      }
+    }
+
+    return {
+      url: signedUrl,
+      documentName: doc.document_name,
+      mimeType: doc.mime_type,
+      size: doc.file_size,
+      sha256Hash: doc.sha256_hash,
+      verificationStatus: doc.verification_status,
+      metadata: doc.metadata
     };
   }
 
@@ -865,7 +968,8 @@ export class BidsService {
       requirementCode: req?.code,
       requirementName: req?.name,
       category: req?.category as RequirementCategory,
-      isMandatory: req?.is_mandatory
+      isMandatory: req?.is_mandatory,
+      version: Number((row.metadata as any)?.version || row.version || 1)
     };
   }
 

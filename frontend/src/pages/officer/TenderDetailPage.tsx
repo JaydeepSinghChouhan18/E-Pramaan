@@ -133,14 +133,22 @@ export const TenderDetailPage: React.FC = () => {
           </Link>
 
           {isDraft && (
-            <button
-              type="button"
-              disabled={actionLoading}
-              onClick={() => handleLifecycle(TenderLifecycleAction.PUBLISH)}
-              className="px-4 py-2 text-xs font-bold tracking-wide uppercase text-white bg-gov-navy hover:bg-gov-navyLight rounded-md shadow-sm"
-            >
-              Publish Tender
-            </button>
+            <>
+              <Link
+                to={`/officer/tenders/${tender.id}/edit`}
+                className="px-3.5 py-2 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-md"
+              >
+                Edit Draft
+              </Link>
+              <button
+                type="button"
+                disabled={actionLoading}
+                onClick={() => handleLifecycle(TenderLifecycleAction.PUBLISH)}
+                className="px-4 py-2 text-xs font-bold tracking-wide uppercase text-white bg-gov-navy hover:bg-gov-navyLight rounded-md shadow-sm cursor-pointer"
+              >
+                Publish Tender
+              </button>
+            </>
           )}
 
           {tender.status === TenderStatus.PUBLISHED && (

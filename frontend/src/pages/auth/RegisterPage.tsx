@@ -11,7 +11,6 @@ export const RegisterPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.BIDDER);
   const [organizationName, setOrganizationName] = useState('');
   const [organizationIdentifier, setOrganizationIdentifier] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -27,17 +26,13 @@ export const RegisterPage: React.FC = () => {
         email,
         password,
         fullName,
-        role,
+        role: UserRole.BIDDER,
         organizationName: organizationName || undefined,
         organizationIdentifier: organizationIdentifier || undefined,
-        organizationType: role === UserRole.OFFICER ? OrganizationType.GOVERNMENT_ENTITY : OrganizationType.BIDDER_ENTITY
+        organizationType: OrganizationType.BIDDER_ENTITY
       });
 
-      if (role === UserRole.OFFICER) {
-        navigate('/officer/dashboard', { replace: true });
-      } else {
-        navigate('/bidder/dashboard', { replace: true });
-      }
+      navigate('/bidder/dashboard', { replace: true });
     } catch (err: any) {
       setLocalError(err.message || 'Registration failed. Check details.');
     } finally {
@@ -86,20 +81,18 @@ export const RegisterPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1" htmlFor="role">
-                Account Type / Role
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Account Type
               </label>
-              <select
-                id="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value as UserRole)}
-                className="w-full py-2 px-3 text-xs bg-slate-50 border border-slate-300 rounded-md font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-gov-navy focus:bg-white"
-              >
-                <option value={UserRole.BIDDER}>Vendor / Bidder Entity</option>
-                <option value={UserRole.OFFICER}>Procurement Officer</option>
-                <option value={UserRole.AUDITOR}>Auditor / Oversight Authority</option>
-              </select>
+              <div className="py-2 px-3 text-xs bg-slate-100 border border-slate-200 rounded-md font-bold text-slate-700 flex items-center justify-between">
+                <span>Vendor / Bidder Entity</span>
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-semibold">Public</span>
+              </div>
             </div>
+          </div>
+
+          <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-md text-[11px] text-blue-800 leading-normal">
+            <span className="font-bold">Government Security Notice:</span> Procurement Officer and Auditor accounts require official sovereign authorization and are provisioned exclusively by Central Government Administration.
           </div>
 
           <div>

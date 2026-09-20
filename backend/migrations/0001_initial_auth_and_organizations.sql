@@ -169,14 +169,25 @@ CREATE POLICY "org_members_read_own" ON public.organization_members
     FOR SELECT
     USING (auth.uid() = user_id);
 
+-- Helper function with SECURITY DEFINER to safely read user's organization IDs
+-- without triggering RLS evaluation loops.
+CREATE OR REPLACE FUNCTION public.get_user_organization_ids(p_user_id UUID)
+RETURNS SETOF UUID
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+    SELECT organization_id FROM public.organization_members WHERE user_id = p_user_id;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_user_organization_ids(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_user_organization_ids(UUID) TO service_role;
+
 -- Members can view other members of the same organization
 DROP POLICY IF EXISTS "org_members_read_colleagues" ON public.organization_members;
 CREATE POLICY "org_members_read_colleagues" ON public.organization_members
     FOR SELECT
     USING (
-        EXISTS (
-            SELECT 1 FROM public.organization_members self_m
-            WHERE self_m.organization_id = organization_members.organization_id
-            AND self_m.user_id = auth.uid()
-        )
+        organization_id IN (SELECT public.get_user_organization_ids(auth.uid()))
     );

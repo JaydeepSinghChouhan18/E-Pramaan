@@ -156,7 +156,27 @@ export class BidsController {
 
       res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
       res.setHeader('Content-Disposition', `inline; filename="${fileInfo.documentName}"`);
+      res.setHeader('X-Document-Integrity', fileInfo.isIntegrityVerified ? 'VERIFIED' : 'MISMATCH');
+      res.setHeader('X-Document-SHA256', fileInfo.sha256Hash || '');
       res.sendFile(fileInfo.absolutePath);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/bids/:id/documents/:documentId/view-url
+   * Retrieve secure signed URL and integrity metadata for viewing the document.
+   */
+  static async getDocumentViewUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const { id, documentId } = req.params;
+      const data = await BidsService.getDocumentViewUrl(user, id, documentId);
+      res.json({
+        success: true,
+        data
+      });
     } catch (err) {
       next(err);
     }

@@ -232,14 +232,14 @@ export class DocumentIntelligenceService {
     let message: string;
 
     if (fieldCount > 0) {
-      status = VerificationStatus.VERIFIED;
-      message = `Extracted ${fieldCount} statutory field(s) via ${provider}.`;
-    } else if (extractedText.trim().length > 0) {
       status = VerificationStatus.PARTIALLY_VERIFIED;
+      message = `Extracted ${fieldCount} statutory field(s) via ${provider}. Awaiting cross-document and statutory validation.`;
+    } else if (extractedText.trim().length > 0) {
+      status = VerificationStatus.PENDING_VERIFICATION;
       message = `Document text parsed (${extractedText.trim().length} chars), but standard statutory identifiers were not found.`;
     } else {
       status = VerificationStatus.UNABLE_TO_VERIFY;
-      message = `Unable to extract machine-readable text from document. Scanned copy may require manual officer inspection.`;
+      message = `Unable to extract machine-readable text from document. Scanned copy requires manual officer inspection or source connection.`;
     }
 
     return {

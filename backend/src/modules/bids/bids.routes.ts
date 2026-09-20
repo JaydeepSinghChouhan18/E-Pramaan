@@ -53,6 +53,12 @@ router.get(
   BidsController.getDocumentFile
 );
 
+router.get(
+  '/:id/documents/:documentId/view-url',
+  requireAuthenticatedUser,
+  BidsController.getDocumentViewUrl
+);
+
 router.delete(
   '/:id/documents/:documentId',
   requireAuthenticatedUser,

@@ -157,6 +157,14 @@ export class AwardsService {
       throw new AppError('Cannot record award decision for a CANCELLED tender.', 400, 'TENDER_CANCELLED');
     }
 
+    if (tender.status === TenderStatus.AWARDED) {
+      throw new AppError(
+        'This tender has already been finalized and AWARDED. Award determinations are legally sealed and cannot be modified directly. An authorized officer must execute an explicit revocation/reopening with mandatory statutory justification.',
+        400,
+        'AWARD_ALREADY_FINALIZED'
+      );
+    }
+
     // 2. Fetch comparative bids to evaluate less-favorable profile rule
     const comparativeBids = await this.getTenderBidComparison(user, payload.tenderId);
     const selected = comparativeBids.find(b => b.bidId === payload.selectedBidId);
@@ -562,6 +570,107 @@ export class AwardsService {
         },
         myBid: myBidInfo
       }
+    };
+  }
+
+  /**
+   * Explicitly revoke an awarded tender decision and reopen for re-evaluation.
+   * Mandates statutory procurement justification and records an immutable audit event.
+   */
+  static async revokeAwardDecision(
+    user: UserProfile,
+    tenderId: string,
+    justification: string
+  ): Promise<{ message: string; tenderId: string; revokedAt: string }> {
+    if (!config.hasSupabaseConfigured()) {
+      throw new AppError('Database unconfigured', 503, 'DATABASE_UNCONFIGURED');
+    }
+
+    if (!justification || justification.trim().length < 20) {
+      throw new AppError(
+        'Mandatory statutory requirement: You must provide a comprehensive justification (minimum 20 characters) explaining the legal, technical, or procedural basis for revoking a finalized contract award.',
+        400,
+        'JUSTIFICATION_INSUFFICIENT'
+      );
+    }
+
+    const admin = getSupabaseAdminClient();
+
+    // 1. Fetch tender and existing decision
+    const { data: tender, error: tErr } = await admin
+      .from('tenders')
+      .select('id, tender_number, title, status')
+      .eq('id', tenderId)
+      .maybeSingle();
+
+    if (tErr || !tender) {
+      throw new AppError('Tender record not found', 404, 'TENDER_NOT_FOUND');
+    }
+
+    if (tender.status !== TenderStatus.AWARDED) {
+      throw new AppError('Only tenders in AWARDED status can be revoked or reopened.', 400, 'TENDER_NOT_AWARDED');
+    }
+
+    const { data: existingDecision } = await admin
+      .from('award_decisions')
+      .select('*')
+      .eq('tender_id', tenderId)
+      .maybeSingle();
+
+    // 2. Revert tender status to UNDER_EVALUATION
+    const revertedStatus = TenderStatus.UNDER_EVALUATION;
+    await admin.from('tenders').update({ status: revertedStatus }).eq('id', tenderId);
+
+    // 3. Mark award decision as revoked / draft
+    if (existingDecision) {
+      await admin.from('award_decisions').update({
+        decision_status: AwardDecisionStatus.DRAFT,
+        clarification_required: true,
+        clarification_text: `[AWARD REVOKED BY ${user.fullName || user.email} ON ${new Date().toISOString()}]: ${justification}`
+      }).eq('id', existingDecision.id);
+    }
+
+    // 4. Record critical audit event
+    await admin.from('audit_events').insert({
+      event_type: 'AWARD_DECISION_REVOKED',
+      entity_type: 'TENDER',
+      entity_id: tenderId,
+      actor_user_id: user.id,
+      actor_role: user.role,
+      action: 'REVOKE_AWARD',
+      details: {
+        tenderNumber: tender.tender_number,
+        revokedBy: user.email,
+        justification,
+        previousDecisionId: existingDecision?.id || null,
+        revertedToStatus: revertedStatus
+      }
+    });
+
+    // 5. Notify participating bidders
+    const { data: allBids } = await admin
+      .from('bids')
+      .select('id, bid_number, submitted_by_user_id')
+      .eq('tender_id', tenderId);
+
+    if (allBids && allBids.length > 0) {
+      for (const b of allBids) {
+        if (!b.submitted_by_user_id) continue;
+        await NotificationsService.createNotification({
+          recipientUserId: b.submitted_by_user_id,
+          type: NotificationType.SYSTEM_ALERT,
+          title: `Contract Award Reopened: Tender ${tender.tender_number}`,
+          message: `The finalized award determination for tender '${tender.title}' (${tender.tender_number}) has been officially reopened for review under statutory oversight. Status has reverted to ${revertedStatus}.`,
+          entityType: 'TENDER',
+          entityId: tenderId
+        });
+      }
+    }
+
+    return {
+      message: 'Award decision successfully revoked and tender reopened for re-evaluation.',
+      tenderId,
+      revokedAt: new Date().toISOString()
     };
   }
 }

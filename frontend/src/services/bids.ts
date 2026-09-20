@@ -100,7 +100,16 @@ export class BidsApi {
    */
   static getDocumentFileUrl(bidId: string, documentId: string): string {
     const apiUrl = import.meta.env.VITE_API_URL || '/api/v1';
-    return `${apiUrl}/bids/${bidId}/documents/${documentId}/file`;
+    const token = localStorage.getItem('token');
+    return `${apiUrl}/bids/${bidId}/documents/${documentId}/file${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  }
+
+  /**
+   * Get secure direct view URL (signed or backend stream) for document preview.
+   */
+  static async getDocumentViewUrl(bidId: string, documentId: string): Promise<{ url: string; expiresIn: number; sha256Hash?: string; mimeType?: string }> {
+    const res = await api.get<{ url: string; expiresIn: number; sha256Hash?: string; mimeType?: string }>(`/bids/${bidId}/documents/${documentId}/view-url`);
+    return res.data || { url: this.getDocumentFileUrl(bidId, documentId), expiresIn: 3600 };
   }
 
   /**

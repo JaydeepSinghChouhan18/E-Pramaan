@@ -10,7 +10,8 @@ import {
   Search,
   Clock,
   CheckCheck,
-  X
+  X,
+  Menu
 } from 'lucide-react';
 import { UserRole, SupportedLanguage, AppNotification, SearchResultItem } from '@e-pramaan/shared';
 import { useRoleContext } from '../../contexts/RoleContext';
@@ -18,7 +19,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { LANGUAGE_OPTIONS } from '../../i18n/translations';
 import { Wave3Api } from '../../services/wave3';
 
-export const Header: React.FC = () => {
+interface HeaderProps {
+  onToggleMobileMenu?: () => void;
+}
+
+export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
   const { activeRole, setActiveRole, language, setLanguage, t } = useRoleContext();
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
@@ -165,20 +170,32 @@ export const Header: React.FC = () => {
 
       {/* Main Header Bar */}
       <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
-        <Link to="/" className="flex items-center space-x-3 flex-shrink-0">
-          <div className="w-9 h-9 rounded bg-gov-navy flex items-center justify-center text-white shadow-inner">
-            <Shield className="w-5 h-5 text-amber-400" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-lg font-black tracking-tight text-gov-navy">{t('portal.title')}</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">v1.0</span>
+        <div className="flex items-center space-x-3">
+          {onToggleMobileMenu && (
+            <button
+              type="button"
+              onClick={onToggleMobileMenu}
+              className="md:hidden p-1.5 rounded-md text-slate-600 hover:text-gov-navy hover:bg-slate-100"
+              aria-label="Open sidebar menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          )}
+          <Link to="/" className="flex items-center space-x-3 flex-shrink-0">
+            <div className="w-9 h-9 rounded bg-gov-navy flex items-center justify-center text-white shadow-inner">
+              <Shield className="w-5 h-5 text-amber-400" />
             </div>
-            <p className="text-[11px] font-medium text-slate-500 hidden sm:block">
-              {t('portal.subtitle')}
-            </p>
-          </div>
-        </Link>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-lg font-black tracking-tight text-gov-navy">{t('portal.title')}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">v1.0</span>
+              </div>
+              <p className="text-[11px] font-medium text-slate-500 hidden sm:block">
+                {t('portal.subtitle')}
+              </p>
+            </div>
+          </Link>
+        </div>
 
         {/* Global Search Input */}
         <div className="relative flex-1 max-w-md hidden md:block" ref={searchRef}>

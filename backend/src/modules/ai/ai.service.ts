@@ -12,7 +12,47 @@ import { config } from '../../config/env.js';
 
 export class AIAssistantService {
   private static isAIConfigured(): boolean {
-    return Boolean(process.env.GEMINI_API_KEY || process.env.VERTEX_AI_KEY);
+    return Boolean(process.env.GEMINI_API_KEY);
+  }
+
+  private static async callGemini(systemPrompt: string, userPrompt: string): Promise<string | null> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 1000
+            }
+          }),
+          signal: controller.signal
+        }
+      );
+
+      clearTimeout(timeout);
+      if (!res.ok) return null;
+
+      const data = await res.json();
+      const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      return candidateText ? candidateText.trim() : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -121,47 +161,99 @@ export class AIAssistantService {
       }
     }
 
-    if (!isAvailable) {
-      // Demo AI Mode: Deliver grounded factual procurement responses computed directly from database
-      let demoAnswer = `[DEMO AI MODE — Grounded in Database Records]\n\n`;
-      if (contextSummary) {
-        demoAnswer += `Based on the active procurement records in e-Pramaan:\n\n${contextSummary}\n`;
-        if (prompt.toLowerCase().includes('mandatory') || prompt.toLowerCase().includes('eligibility')) {
-          demoAnswer += `\nSummary: Bidders must satisfy all mandatory statutory thresholds (PAN, GSTIN, and MSME/Udyam certificates) to qualify for financial evaluation under GFR Rule 173.`;
-        } else if (prompt.toLowerCase().includes('discrepanc') || prompt.toLowerCase().includes('risk')) {
-          demoAnswer += `\nSummary: Any detected mismatch (e.g. PAN name vs GST trade name) will trigger automated discrepancy flags and increase the vendor's risk level to HIGH/MEDIUM in accordance with procurement compliance policies.`;
-        } else {
-          demoAnswer += `\nRecommendation: Proceed with standard automated verification run to evaluate statutory compliance and risk parameters.`;
-        }
-      } else {
-        demoAnswer += `I am operating in Demo AI Mode. Please select a specific tender or bid from the dropdown above to analyze its compliance criteria, requirement breakdown, and verification history.`;
+    // High-Precision Deterministic Database Fact Routing
+    const lowerPrompt = prompt.toLowerCase();
+    if (tenderId && contextSummary) {
+      if (lowerPrompt.includes('mandatory') || lowerPrompt.includes('eligib')) {
+        const reqLines = contextSummary
+          .split('\n')
+          .find(l => l.startsWith('Requirements:'));
+        const directFact = `### Mandatory Eligibility Criteria (Grounded in Verified Tender Records)\n\n` +
+          (reqLines ? reqLines.replace('Requirements:', '').trim().split('; ').map((r, i) => `${i + 1}. **${r}**`).join('\n') : 'No mandatory requirements specified in tender notice.') +
+          `\n\n**Statutory GFR 2017 Rule 173(i) Compliance**: Failure to satisfy any mandatory eligibility requirement results in technical disqualification before financial opening.`;
+        return {
+          answer: directFact,
+          status: 'SUCCESS',
+          groundedReferences,
+          provider: 'DATABASE_GROUNDED',
+          model: 'database-facts-v1',
+          language,
+          timestamp: new Date().toISOString()
+        };
       }
 
-      return {
-        answer: demoAnswer,
-        status: 'SUCCESS',
-        groundedReferences,
-        provider: 'DEMO_AI_ENGINE',
-        model: 'statutory-rules-v1',
-        language,
-        timestamp: new Date().toISOString()
-      };
+      if (lowerPrompt.includes('document') || lowerPrompt.includes('checklist') || lowerPrompt.includes('evidence') || lowerPrompt.includes('attach')) {
+        const reqLines = contextSummary
+          .split('\n')
+          .find(l => l.startsWith('Requirements:'));
+        const directFact = `### Statutory Document Checklist (Grounded in Verified Tender Records)\n\n` +
+          (reqLines ? reqLines.replace('Requirements:', '').trim().split('; ').map((r, i) => `${i + 1}. [Credential Code] **${r}**`).join('\n') : 'No document requirements specified.') +
+          `\n\n*Documents uploaded to your Bidder Document Vault will be verified via native text parsing and sovereign SHA-256 hash checks.*`;
+        return {
+          answer: directFact,
+          status: 'SUCCESS',
+          groundedReferences,
+          provider: 'DATABASE_GROUNDED',
+          model: 'database-facts-v1',
+          language,
+          timestamp: new Date().toISOString()
+        };
+      }
     }
 
-    let answer = `Based on retrieved procurement records:\n`;
+    if (isAvailable && contextSummary) {
+      const systemPrompt = `You are the e-Pramaan Procurement AI Assistant for Indian Sovereign Public Procurement.
+Answer strictly based on the provided procurement records.
+Distinguish clearly between:
+1. VERIFIED DATABASE FACTS: What is confirmed by the system records.
+2. ADVISORY / REGULATORY INTERPRETATION: Guidance under Indian General Financial Rules (GFR 2017) and CVC guidelines.
+Never speculate or hallucinate. If details are not present in the provided context, state that clearly.`;
+
+      const userPrompt = `Context:
+${contextSummary}
+
+User Inquiry: ${prompt}
+User Role: ${user.role}
+Language: ${language}`;
+
+      const geminiText = await this.callGemini(systemPrompt, userPrompt);
+      if (geminiText) {
+        return {
+          answer: geminiText,
+          status: 'SUCCESS',
+          groundedReferences,
+          provider: 'GOOGLE_GEMINI',
+          model: 'gemini-1.5-flash',
+          language,
+          timestamp: new Date().toISOString()
+        };
+      }
+    }
+
+    // Grounded factual procurement response computed directly from database
+    let factualAnswer = `### Verified Procurement Database Records\n\n`;
     if (contextSummary) {
-      answer += contextSummary;
-      answer += `\nNote: All criteria evaluations and determinations are subject to final statutory verification by the designated procurement officer.`;
+      factualAnswer += `${contextSummary}\n`;
+      if (prompt.toLowerCase().includes('mandatory') || prompt.toLowerCase().includes('eligibility')) {
+        factualAnswer += `\n**Eligibility Rule**: Bidders must satisfy all mandatory statutory thresholds (PAN, GSTIN, and MSME/Udyam certificates) to qualify for financial evaluation under GFR Rule 173.`;
+      } else if (prompt.toLowerCase().includes('discrepanc') || prompt.toLowerCase().includes('risk')) {
+        factualAnswer += `\n**Integrity Rule**: Any detected mismatch (e.g. PAN name vs GST trade name) triggers automated discrepancy flags and elevates the vendor's risk level to HIGH/MEDIUM in accordance with procurement compliance policies.`;
+      } else {
+        factualAnswer += `\n**Procedural Rule**: Proceed with standard automated verification run to evaluate statutory compliance and risk parameters.`;
+      }
+      if (!isAvailable) {
+        factualAnswer += `\n\n*(Note: Live Gemini LLM is currently unconfigured. Responses are strictly grounded in verified database records).*`;
+      }
     } else {
-      answer = `I don't have sufficient verified evidence from the current database context to answer that question specifically. Please select a tender or bid to ground the inquiry in verified records.`;
+      factualAnswer += `No specific procurement context selected. Please select a tender or bid from the dropdown above to analyze its compliance criteria, requirement breakdown, and verification history.`;
     }
 
     return {
-      answer,
+      answer: factualAnswer,
       status: contextSummary ? 'SUCCESS' : 'INSUFFICIENT_EVIDENCE',
       groundedReferences,
-      provider: 'GOOGLE_GEMINI',
-      model: 'gemini-1.5-pro',
+      provider: isAvailable ? 'DATABASE_GROUNDED' : 'UNCONFIGURED_FALLBACK',
+      model: 'database-facts-v1',
       language,
       timestamp: new Date().toISOString()
     };

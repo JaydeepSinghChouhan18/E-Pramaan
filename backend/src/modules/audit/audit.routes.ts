@@ -26,4 +26,11 @@ router.get(
   AuditController.listAIOverrides
 );
 
+router.get(
+  '/export',
+  requireAuthenticatedUser,
+  requireAnyRole([UserRole.OFFICER, UserRole.ADMIN, UserRole.AUDITOR]),
+  AuditController.exportAuditPackage
+);
+
 export default router;

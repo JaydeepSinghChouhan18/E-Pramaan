@@ -6,7 +6,8 @@ import {
   FileCheck2,
   HardDrive,
   Eye,
-  DownloadCloud
+  DownloadCloud,
+  RefreshCw
 } from 'lucide-react';
 
 import { BidDocument } from '@e-pramaan/shared';
@@ -19,6 +20,9 @@ export const MyDocumentsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [fetchingDigiLocker, setFetchingDigiLocker] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<BidDocument | null>(null);
+  const [replacingDoc, setReplacingDoc] = useState<BidDocument | null>(null);
+  const [replacing, setReplacing] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -36,6 +40,35 @@ export const MyDocumentsPage: React.FC = () => {
   useEffect(() => {
     fetchDocuments();
   }, [fetchDocuments]);
+
+  const handleTriggerReplace = (doc: BidDocument) => {
+    setReplacingDoc(doc);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !replacingDoc) return;
+
+    try {
+      setReplacing(true);
+      setError(null);
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('tenderRequirementId', replacingDoc.tenderRequirementId);
+      formData.append('metadata', JSON.stringify({ replacesDocumentId: replacingDoc.id }));
+      await BidsApi.uploadDocument(replacingDoc.bidId, formData);
+      await fetchDocuments();
+    } catch (err: any) {
+      setError(err.message || 'Failed to replace document with new version.');
+    } finally {
+      setReplacing(false);
+      setReplacingDoc(null);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -112,7 +145,12 @@ export const MyDocumentsPage: React.FC = () => {
                       <div className="flex items-center space-x-2">
                         <FileText className="w-4 h-4 text-gov-navy flex-shrink-0" />
                         <div>
-                          <div className="font-semibold text-slate-800">{doc.documentName}</div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-semibold text-slate-800">{doc.documentName}</span>
+                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                              v{(doc as any).version || 1}
+                            </span>
+                          </div>
                           <div className="text-[10px] text-slate-400 font-mono">{doc.mimeType}</div>
                         </div>
                       </div>
@@ -158,13 +196,25 @@ export const MyDocumentsPage: React.FC = () => {
                     </td>
 
                     <td className="py-3.5 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewDoc(doc)}
-                        className="inline-flex items-center px-2.5 py-1 bg-white border border-slate-300 rounded text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs"
-                      >
-                        <Eye className="w-3 h-3 mr-1 text-slate-600" /> View
-                      </button>
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerReplace(doc)}
+                          disabled={replacing}
+                          className="inline-flex items-center px-2 py-1 bg-slate-50 border border-slate-300 rounded text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs disabled:opacity-50"
+                          title="Upload updated file to generate next document version"
+                        >
+                          <RefreshCw className={`w-3 h-3 mr-1 text-slate-500 ${replacing && replacingDoc?.id === doc.id ? 'animate-spin' : ''}`} />
+                          Replace
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDoc(doc)}
+                          className="inline-flex items-center px-2.5 py-1 bg-white border border-slate-300 rounded text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs"
+                        >
+                          <Eye className="w-3 h-3 mr-1 text-slate-600" /> View
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -174,10 +224,21 @@ export const MyDocumentsPage: React.FC = () => {
         )}
       </div>
 
+      {/* Hidden file input for document replacement */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileSelected}
+        className="hidden"
+        accept=".pdf,.png,.jpg,.jpeg"
+      />
+
       {/* Document Preview Modal */}
       {previewDoc && (
         <DocumentViewerModal
           document={{
+            id: previewDoc.id,
+            bidId: previewDoc.bidId,
             name: previewDoc.documentName,
             size: previewDoc.fileSize,
             mimeType: previewDoc.mimeType,
@@ -185,6 +246,7 @@ export const MyDocumentsPage: React.FC = () => {
             reqName: previewDoc.requirementName,
             reqCode: previewDoc.requirementCode,
             status: previewDoc.verificationStatus,
+            storagePath: (previewDoc as any).storagePath,
             uploadedAt: previewDoc.uploadedAt,
           }}
           onClose={() => setPreviewDoc(null)}

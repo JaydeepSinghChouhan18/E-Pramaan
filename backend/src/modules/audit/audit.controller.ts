@@ -40,4 +40,22 @@ export class AuditController {
       next(err);
     }
   }
+
+  static async exportAuditPackage(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const tenderId = req.query.tenderId as string | undefined;
+      const zipBuffer = await AuditService.exportAuditPackage(user, { tenderId });
+
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `e-pramaan-audit-package-${dateStr}.zip`;
+
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', zipBuffer.length);
+      res.status(200).send(zipBuffer);
+    } catch (err) {
+      next(err);
+    }
+  }
 }

@@ -96,8 +96,51 @@ export class ComplianceService {
         raw_snippet: extraction.rawSnippet
       });
 
+      // Determine validated verification status based on extraction and requirement matching:
+      let docVerificationStatus: VerificationStatus = extraction.status;
+
+      const reqId = doc.tender_requirement_id;
+      const targetReq = (bid.tender?.tender_requirements || []).find((r: any) => r.id === reqId);
+      const reqCategory = (targetReq?.category || '').toUpperCase();
+      const reqCode = (targetReq?.code || '').toUpperCase();
+      const orgIdentifier = ((bid.bidder_organization as any)?.identifier || '').toUpperCase();
+
+      if (extraction.status === VerificationStatus.UNABLE_TO_VERIFY) {
+        docVerificationStatus = VerificationStatus.SOURCE_UNAVAILABLE;
+      } else if (extraction.status === VerificationStatus.PARTIALLY_VERIFIED) {
+        let hasDiscrepancy = false;
+        if (reqCategory.includes('PAN') || reqCode.includes('PAN')) {
+          const extractedPan = extraction.fields['pan']?.fieldValue?.toString().toUpperCase();
+          if (extractedPan && orgIdentifier && orgIdentifier.length === 10 && extractedPan !== orgIdentifier) {
+            docVerificationStatus = VerificationStatus.DISCREPANCY;
+            hasDiscrepancy = true;
+          } else if (extractedPan) {
+            docVerificationStatus = VerificationStatus.VERIFIED;
+          }
+        } else if (reqCategory.includes('TAX') || reqCategory.includes('GST') || reqCode.includes('GST')) {
+          const extractedGst = extraction.fields['gstin']?.fieldValue?.toString().toUpperCase();
+          if (extractedGst && orgIdentifier && orgIdentifier.length === 15 && extractedGst !== orgIdentifier) {
+            docVerificationStatus = VerificationStatus.DISCREPANCY;
+            hasDiscrepancy = true;
+          } else if (extractedGst) {
+            docVerificationStatus = VerificationStatus.VERIFIED;
+          }
+        } else if (reqCategory.includes('MSME') || reqCode.includes('UDYAM')) {
+          const udyam = extraction.fields['udyamNumber']?.fieldValue?.toString();
+          if (udyam) {
+            docVerificationStatus = VerificationStatus.VERIFIED;
+          }
+        } else if (extraction.fields['legalName']) {
+          docVerificationStatus = VerificationStatus.VERIFIED;
+        }
+
+        if (!hasDiscrepancy && docVerificationStatus !== VerificationStatus.VERIFIED) {
+          docVerificationStatus = VerificationStatus.PARTIALLY_VERIFIED;
+        }
+      }
+
       // Update document verification status and sha256_hash in database
-      const updateDocData: Record<string, any> = { verification_status: VerificationStatus.VERIFIED };
+      const updateDocData: Record<string, any> = { verification_status: docVerificationStatus };
       if (extraction.sha256Hash && !doc.sha256_hash) {
         updateDocData.sha256_hash = extraction.sha256Hash;
       }
@@ -112,7 +155,7 @@ export class ComplianceService {
         documentName: doc.document_name,
         mimeType: doc.mime_type,
         fileSize: Number(doc.file_size || 0),
-        verificationStatus: VerificationStatus.VERIFIED,
+        verificationStatus: docVerificationStatus,
         extractedFields: extraction.fields
       });
     }

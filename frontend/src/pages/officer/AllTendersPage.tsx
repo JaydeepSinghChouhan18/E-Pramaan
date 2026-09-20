@@ -217,13 +217,21 @@ export const AllTendersPage: React.FC = () => {
                       </Link>
 
                       {t.status === TenderStatus.DRAFT && (
-                        <button
-                          type="button"
-                          onClick={() => handleLifecycleAction(t.id, TenderLifecycleAction.PUBLISH)}
-                          className="px-2 py-1 rounded text-xs font-semibold text-white bg-gov-navy hover:bg-gov-navyLight"
-                        >
-                          Publish
-                        </button>
+                        <>
+                          <Link
+                            to={`/officer/tenders/${t.id}/edit`}
+                            className="inline-flex items-center px-2.5 py-1 rounded text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-300 hover:bg-amber-100"
+                          >
+                            Edit
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => handleLifecycleAction(t.id, TenderLifecycleAction.PUBLISH)}
+                            className="px-2 py-1 rounded text-xs font-semibold text-white bg-gov-navy hover:bg-gov-navyLight cursor-pointer"
+                          >
+                            Publish
+                          </button>
+                        </>
                       )}
 
                       {t.status === TenderStatus.PUBLISHED && (

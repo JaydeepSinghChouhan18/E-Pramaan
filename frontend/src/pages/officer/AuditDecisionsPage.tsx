@@ -78,6 +78,36 @@ export const AuditDecisionsPage: React.FC = () => {
 
   // Document Viewer state
   const [viewingDoc, setViewingDoc] = useState<any | null>(null);
+  const [exporting, setExporting] = useState<boolean>(false);
+
+  const handleExportAuditPackage = async () => {
+    try {
+      setExporting(true);
+      const token = localStorage.getItem('token');
+      const apiUrl = import.meta.env.VITE_API_URL || '/api/v1';
+      const res = await fetch(`${apiUrl}/audit/export`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) {
+        throw new Error('Failed to generate cryptographic audit export package.');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `e-pramaan-cag-audit-dossier-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || 'Audit export failed.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Vigilance Case Modal state
   const [vigilanceModalTarget, setVigilanceModalTarget] = useState<{
@@ -287,11 +317,12 @@ export const AuditDecisionsPage: React.FC = () => {
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={() => alert('CVC / CAG cryptographically sealed audit report package generated.')}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-md text-xs font-semibold hover:bg-slate-900 transition shadow-sm"
+            onClick={handleExportAuditPackage}
+            disabled={exporting}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-md text-xs font-semibold hover:bg-slate-900 transition shadow-sm disabled:opacity-50 cursor-pointer"
           >
-            <Download className="h-4 w-4" />
-            Export Audit Package
+            {exporting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {exporting ? 'Exporting Package...' : 'Export Audit Package'}
           </button>
         </div>
       </div>
@@ -862,6 +893,37 @@ export const AuditDecisionsPage: React.FC = () => {
                       <div className="p-3 bg-purple-50/50 border border-purple-200 rounded-md text-xs space-y-1">
                         <span className="font-bold text-purple-900">Machine Recommendation:</span>
                         <p className="text-slate-800">{reconstructionData.aiRecommendationSummary}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Attached Submissions & Documents */}
+                  {(reconstructionData as any).documents && (reconstructionData as any).documents.length > 0 && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                        <FileText className="h-4 w-4 text-slate-600" />
+                        Attached Statutory Evidence ({(reconstructionData as any).documents.length})
+                      </h3>
+                      <div className="space-y-2">
+                        {(reconstructionData as any).documents.map((doc: any, idx: number) => (
+                          <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded text-xs">
+                            <div className="flex items-center space-x-2 truncate">
+                              <FileText className="h-4 w-4 text-indigo-600 shrink-0" />
+                              <span className="font-semibold text-slate-800 truncate">{doc.name}</span>
+                              <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-mono">{doc.status || 'VERIFIED'}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setViewingDoc({
+                                ...doc,
+                                organizationName: reconstructionData.selectedBidderName,
+                              })}
+                              className="px-2.5 py-1 bg-indigo-600 text-white hover:bg-indigo-700 rounded text-xs font-semibold shrink-0 cursor-pointer"
+                            >
+                              Inspect Document
+                            </button>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
