@@ -7,8 +7,8 @@ export class AwardsController {
     try {
       const user = req.user!;
       const tenderId = req.params.tenderId;
-      const [bids, existingDecision, tender] = await Promise.all([
-        AwardsService.getTenderBidComparison(user, tenderId),
+      const [comparativeResult, existingDecision, tender] = await Promise.all([
+        AwardsService.computeTenderMCDAComparison(user, tenderId, { autoRunUnverified: false }),
         AwardsService.getDecisionByTenderId(user, tenderId),
         TendersService.getTenderById(user, tenderId).catch(() => null)
       ]);
@@ -17,9 +17,25 @@ export class AwardsController {
         success: true,
         data: {
           tender,
-          bids,
+          bids: [...comparativeResult.rankedBids, ...comparativeResult.excludedBids],
+          comparative_evaluation: comparativeResult,
           existing_decision: existingDecision
         }
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async generateAiComplianceAnalysis(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const tenderId = req.params.tenderId;
+      const data = await AwardsService.generateAiComplianceAnalysis(user, tenderId);
+      res.json({
+        success: true,
+        message: 'AI Compliance & MCDA Comparative Analysis generated successfully.',
+        data
       });
     } catch (err) {
       next(err);

@@ -2,6 +2,7 @@ import {
   AwardDecision,
   AwardDecisionStatus,
   BidComparisonItem,
+  ComparativeEvaluationResult,
   CreateAwardDecisionPayload,
   DecisionReconstruction,
   AuditEventType,
@@ -18,18 +19,83 @@ import { AppError } from '../../middlewares/errorHandler.js';
 import { config } from '../../config/env.js';
 import { AuditService } from '../audit/audit.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { ComplianceService } from '../compliance/compliance.service.js';
 
 export class AwardsService {
   /**
-   * Comparative Bid Analysis for a tender.
-   * Compares all submitted/under-review bids with their compliance scores, risk levels, and discrepancies.
+   * Deterministic Multi-Criteria Decision Analysis (MCDA) & Comparative Evaluation Engine.
+   * Evaluates ALL submitted applications belonging to a tender:
+   * 1. Mandatory Eligibility Gate (Pass / Excluded)
+   * 2. Technical & Statutory Compliance (40% Weight)
+   * 3. Operational Experience & Age (20% Weight)
+   * 4. Commercial Price Normalization (40% Weight: Lowest Eligible Bid / Quoted Bid * 100)
+   * 5. Explainable Composite Scoring & Deterministic Ranking
    */
-  static async getTenderBidComparison(_user: UserProfile, tenderId: string): Promise<BidComparisonItem[]> {
-    if (!config.hasSupabaseConfigured()) return [];
+  static async computeTenderMCDAComparison(
+    user: UserProfile,
+    tenderId: string,
+    options: { autoRunUnverified?: boolean; recordAuditEvent?: boolean } = {}
+  ): Promise<ComparativeEvaluationResult> {
+    if (!config.hasSupabaseConfigured()) {
+      return {
+        tenderId,
+        evaluatedAt: new Date().toISOString(),
+        evaluationVersion: 1,
+        weights: { compliance: 40, experience: 20, price: 40 },
+        totalBidsCount: 0,
+        eligibleBidsCount: 0,
+        excludedBidsCount: 0,
+        lowestEligiblePrice: null,
+        rankedBids: [],
+        excludedBids: [],
+        topRankedExplanation: null,
+        existingDecision: null
+      };
+    }
 
     const admin = getSupabaseAdminClient();
 
-    // 1. Fetch bids for tender
+    // 1. Fetch tender details with requirements
+    const { data: tender, error: tErr } = await admin
+      .from('tenders')
+      .select(`
+        id,
+        tender_number,
+        title,
+        status,
+        estimated_value,
+        minimum_company_age_years,
+        procuring_organization_id,
+        created_by,
+        tender_requirements (
+          id,
+          code,
+          name,
+          category,
+          requirement_type,
+          is_mandatory,
+          weight,
+          configuration
+        )
+      `)
+      .eq('id', tenderId)
+      .maybeSingle();
+
+    if (tErr || !tender) {
+      throw new AppError('Tender record not found for comparative evaluation.', 404, 'TENDER_NOT_FOUND');
+    }
+
+    // Authorization check
+    const isAuthorized = user.role === UserRole.ADMIN ||
+      user.role === UserRole.AUDITOR ||
+      tender.created_by === user.id ||
+      (user.organization?.id && tender.procuring_organization_id === user.organization.id);
+
+    if (!isAuthorized) {
+      throw new AppError('You are not authorized to evaluate comparative bids for this tender.', 403, 'FORBIDDEN');
+    }
+
+    // 2. Fetch all submitted/under-review bids for tender
     const { data: bids, error: bidsErr } = await admin
       .from('bids')
       .select(`
@@ -42,12 +108,15 @@ export class AwardsService {
         bidder_organization_id,
         bidder_organization:organizations (
           id,
-          legal_name
+          legal_name,
+          identifier
         ),
-        bid_documents (id),
-        tender:tenders (
+        bid_documents (
           id,
-          tender_requirements (id, is_mandatory)
+          tender_requirement_id,
+          document_name,
+          metadata,
+          verification_status
         )
       `)
       .eq('tender_id', tenderId)
@@ -58,12 +127,35 @@ export class AwardsService {
       throw new AppError('Failed to retrieve bids for comparative evaluation', 500, 'DB_ERROR', bidsErr);
     }
 
-    const results: BidComparisonItem[] = [];
+    const reqs = (tender.tender_requirements || []) as Array<any>;
+    const mandatoryReqs = reqs.filter(r => r.is_mandatory);
+    const minCompanyAge = tender.minimum_company_age_years || 3;
+
+    // Bulk verification execution if requested ("Generate AI Compliance Analysis")
+    if (options.autoRunUnverified && bids && bids.length > 0) {
+      for (const b of bids) {
+        const { count } = await admin
+          .from('verification_runs')
+          .select('id', { count: 'exact', head: true })
+          .eq('bid_id', b.id)
+          .eq('is_latest', true);
+
+        if (!count || count === 0) {
+          try {
+            await ComplianceService.runVerification(user, b.id);
+          } catch (verifErr) {
+            console.warn(`[computeTenderMCDAComparison] Note running verification for ${b.bid_number}:`, verifErr);
+          }
+        }
+      }
+    }
+
+    const intermediateItems: BidComparisonItem[] = [];
 
     for (const b of bids || []) {
       const org = Array.isArray(b.bidder_organization) ? b.bidder_organization[0] : b.bidder_organization;
-      const tender = Array.isArray(b.tender) ? b.tender[0] : b.tender;
-      const mandatoryReqs = (tender?.tender_requirements || []).filter((r: any) => r.is_mandatory);
+      const orgIdentifier = org?.identifier || '';
+      const ineligibilityReasons: string[] = [];
 
       // Fetch latest verification run for this bid
       const { data: run } = await admin
@@ -80,20 +172,19 @@ export class AwardsService {
         .eq('bid_id', b.id)
         .in('status', ['OPEN', 'IN_REVIEW', 'ACTION_REQUIRED']);
 
-      // Count discrepancies
+      // Fetch discrepancies
       const { data: discs } = run ? await admin
         .from('discrepancies')
-        .select('id, severity')
+        .select('id, code, title, description, severity')
         .eq('verification_run_id', run.id) : { data: [] };
 
       const score = run?.compliance_score?.overallScore ?? 0;
       const risk = (run?.risk_assessment?.riskLevel as RiskLevel) || RiskLevel.LOW;
       const mandComplied = run?.compliance_score?.mandatoryComplied ?? false;
       const mandMet = run?.compliance_score?.mandatoryMetCount ?? 0;
+      const criticalDiscs = (discs || []).filter((d: any) => d.severity === 'CRITICAL');
 
-      const criticalDiscs = (discs || []).filter((d: any) => d.severity === 'CRITICAL').length;
-
-      // Parse bid amount from database column or submission notes
+      // Parse commercial bid amount
       let bidAmount: number | null = null;
       const rawBid = b as any;
       if (rawBid.bid_amount !== undefined && rawBid.bid_amount !== null) {
@@ -105,7 +196,78 @@ export class AwardsService {
         }
       }
 
-      results.push({
+      // Mandatory Eligibility Gate Evaluation
+      if (b.status === BidStatus.DISQUALIFIED) {
+        ineligibilityReasons.push('Bid application formally disqualified');
+      }
+
+      if (!mandComplied) {
+        ineligibilityReasons.push(`Failed mandatory statutory criteria (${mandMet}/${mandatoryReqs.length} met)`);
+      }
+
+      const attachedReqIds = new Set((b.bid_documents || []).map((d: any) => d.tender_requirement_id));
+      for (const mr of mandatoryReqs) {
+        if (!attachedReqIds.has(mr.id)) {
+          ineligibilityReasons.push(`Missing mandatory requirement document: ${mr.code} (${mr.name})`);
+        }
+      }
+
+      for (const cd of criticalDiscs) {
+        ineligibilityReasons.push(`[Critical Discrepancy] ${cd.title}: ${cd.description}`);
+      }
+
+      if (bidAmount === null || bidAmount <= 0) {
+        ineligibilityReasons.push('Commercial proposal missing or non-positive bid amount');
+      }
+
+      // Experience & Company Age Evaluation (Based strictly on verified evidence)
+      let verifiedAge: number | null = null;
+      let experienceScore = 0;
+      let experienceEvidenceNote = 'Insufficient verified evidence';
+
+      // 1. Try CIN parsing (characters 8-11 indicate incorporation year)
+      const cinMatch = orgIdentifier.match(/^[LUu]\d{5}[A-Za-z]{2}(\d{4})/i);
+      let incYear = cinMatch ? parseInt(cinMatch[1], 10) : null;
+
+      // 2. Check attached document metadata/evidence if CIN did not yield year
+      if (!incYear && b.bid_documents) {
+        for (const doc of b.bid_documents) {
+          const meta = (doc as any).metadata || {};
+          if (meta.incorporationDate) {
+            const dMatch = String(meta.incorporationDate).match(/(\d{4})/);
+            if (dMatch) { incYear = parseInt(dMatch[1], 10); break; }
+          }
+          if (meta.cin) {
+            const m = String(meta.cin).match(/^[LUu]\d{5}[A-Za-z]{2}(\d{4})/i);
+            if (m) { incYear = parseInt(m[1], 10); break; }
+          }
+        }
+      }
+
+      const currentYear = new Date().getFullYear();
+      if (incYear && incYear > 1900 && incYear <= currentYear) {
+        verifiedAge = currentYear - incYear;
+        if (verifiedAge >= minCompanyAge) {
+          const bonus = Math.min(30, (verifiedAge - minCompanyAge) * 3);
+          experienceScore = Math.min(100, 70 + bonus);
+          experienceEvidenceNote = `Verified ${verifiedAge} yrs active operation (Est. ${incYear} via CIN ${orgIdentifier}) meets tender threshold (${minCompanyAge} yrs)`;
+        } else {
+          experienceScore = Math.round((verifiedAge / minCompanyAge) * 60);
+          experienceEvidenceNote = `Entity age ${verifiedAge} yrs falls below tender minimum ${minCompanyAge} yrs`;
+          ineligibilityReasons.push(`Entity age (${verifiedAge} yrs) falls below tender minimum requirement (${minCompanyAge} yrs)`);
+        }
+      } else {
+        experienceScore = 0;
+        experienceEvidenceNote = 'Insufficient verified evidence';
+        const hasMandatoryAgeReq = mandatoryReqs.some((r: any) => r.code?.includes('AGE') || r.category === 'COMPANY');
+        if (hasMandatoryAgeReq) {
+          ineligibilityReasons.push('Insufficient verified experience evidence for mandatory company age threshold');
+        }
+      }
+
+      const eligibilityStatus: 'PASS' | 'FAIL' = ineligibilityReasons.length === 0 ? 'PASS' : 'FAIL';
+
+      intermediateItems.push({
         bidId: b.id,
         bidNumber: b.bid_number,
         bidderOrganizationId: b.bidder_organization_id,
@@ -119,18 +281,168 @@ export class AwardsService {
         mandatoryMetCount: mandMet,
         mandatoryTotalCount: mandatoryReqs.length,
         discrepanciesCount: (discs || []).length,
-        criticalDiscrepanciesCount: criticalDiscs,
+        criticalDiscrepanciesCount: criticalDiscs.length,
         openInvestigationsCount: openInvs || 0,
         verificationStatus: (run?.verification_status as VerificationStatus) || VerificationStatus.PENDING_VERIFICATION,
-        evidenceCount: (b.bid_documents || []).length
+        evidenceCount: (b.bid_documents || []).length,
+
+        // MCDA fields
+        eligibilityStatus,
+        ineligibilityReasons: ineligibilityReasons.length > 0 ? ineligibilityReasons : undefined,
+        experienceYears: verifiedAge,
+        experienceScore,
+        experienceEvidenceNote,
+        priceScore: 0,
+        mcdaScore: 0,
+        rank: null,
+        mcdaWeights: { compliance: 40, experience: 20, price: 40 }
       });
     }
 
-    return results;
+    // 3. Price Normalization across eligible bidders
+    const eligibleBids = intermediateItems.filter(i => i.eligibilityStatus === 'PASS' && i.bidAmount && i.bidAmount > 0);
+    const lowestEligiblePrice = eligibleBids.length > 0
+      ? Math.min(...eligibleBids.map(i => i.bidAmount!))
+      : null;
+
+    for (const item of intermediateItems) {
+      if (item.eligibilityStatus === 'PASS' && lowestEligiblePrice && item.bidAmount && item.bidAmount > 0) {
+        item.priceScore = Math.round((lowestEligiblePrice / item.bidAmount) * 1000) / 10;
+        const expScore = item.experienceScore ?? 0;
+        item.mcdaScore = Math.round(
+          ((item.complianceScore * 0.40) + (expScore * 0.20) + (item.priceScore * 0.40)) * 10
+        ) / 10;
+      } else {
+        item.priceScore = 0;
+        item.mcdaScore = 0;
+      }
+    }
+
+    // 4. Deterministic Ranking for eligible bids
+    eligibleBids.sort((a, b) => {
+      // Priority 1: MCDA Score DESC
+      const mcdaA = a.mcdaScore ?? 0;
+      const mcdaB = b.mcdaScore ?? 0;
+      if (mcdaB !== mcdaA) return mcdaB - mcdaA;
+
+      // Priority 2: Price Score DESC (lower price breaks tie)
+      const priceA = a.priceScore ?? 0;
+      const priceB = b.priceScore ?? 0;
+      if (priceB !== priceA) return priceB - priceA;
+
+      // Priority 3: Compliance Score DESC
+      if (b.complianceScore !== a.complianceScore) return b.complianceScore - a.complianceScore;
+
+      // Priority 4: Submission time ASC (earlier submission breaks tie)
+      const tA = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
+      const tB = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
+      return tA - tB;
+    });
+
+    eligibleBids.forEach((item, index) => {
+      item.rank = index + 1;
+      item.rankingExplanation = `Rank #${index + 1}: Composite MCDA Score ${item.mcdaScore}/100 ` +
+        `[Compliance 40%: ${item.complianceScore}, Experience 20%: ${item.experienceScore}, Price 40%: ${item.priceScore}]. ` +
+        `Quoted Amount: INR ${item.bidAmount?.toLocaleString('en-IN')}.`;
+    });
+
+    const excludedBids = intermediateItems.filter(i => i.eligibilityStatus === 'FAIL');
+    excludedBids.forEach(item => {
+      item.rank = null;
+      item.rankingExplanation = `Excluded from award ranking: ${item.ineligibilityReasons?.join('; ') || 'Failed mandatory criteria'}.`;
+    });
+
+    // 5. Generate Structured Explanation for Top Ranked (#1) Contender
+    const topBid = eligibleBids[0];
+    const topRankedExplanation = topBid ? {
+      bidId: topBid.bidId,
+      bidNumber: topBid.bidNumber,
+      bidderName: topBid.bidderOrganizationName,
+      rank: 1,
+      mcdaScore: topBid.mcdaScore ?? 0,
+      complianceScore: topBid.complianceScore ?? 0,
+      experienceScore: topBid.experienceScore ?? 0,
+      priceScore: topBid.priceScore ?? 0,
+      bidAmount: topBid.bidAmount ?? null,
+      lowestEligiblePrice,
+      weights: { compliance: 40, experience: 20, price: 40 },
+      keyVerifiedEvidence: [
+        `Statutory Compliance: ${topBid.complianceScore}/100 with ${topBid.mandatoryMetCount}/${topBid.mandatoryTotalCount} mandatory requirements satisfied`,
+        `Operational Experience: ${topBid.experienceEvidenceNote} (Score: ${topBid.experienceScore}/100)`,
+        `Commercial Competitiveness: Quoted ₹${Number(topBid.bidAmount).toLocaleString('en-IN')} yielding normalized Price Score of ${topBid.priceScore}/100 (Benchmark lowest price: ₹${Number(lowestEligiblePrice).toLocaleString('en-IN')})`,
+        `Integrity Verification: ${topBid.discrepanciesCount} discrepancies detected, Operational Risk: ${topBid.riskLevel}`
+      ],
+      riskLevel: topBid.riskLevel,
+      discrepanciesCount: topBid.discrepanciesCount,
+      summary: `Bidder ${topBid.bidderOrganizationName} achieves Rank #1 with a composite MCDA score of ${topBid.mcdaScore}/100 ` +
+        `based on transparent multi-criteria weighting: Compliance (40%), Experience (20%), and Price (40%). ` +
+        `Mathematical Verification: (${topBid.complianceScore} × 0.40) + (${topBid.experienceScore} × 0.20) + (${topBid.priceScore} × 0.40) = ${topBid.mcdaScore}/100.`
+    } : null;
+
+    // 6. Record Audit Event if requested
+    if (options.recordAuditEvent) {
+      await AuditService.logEvent({
+        eventType: AuditEventType.AI_RECOMMENDATION_GENERATED,
+        entityType: 'TENDER',
+        entityId: tenderId,
+        tenderId: tenderId,
+        actorUserId: user.id,
+        actorRole: user.role,
+        description: `Generated AI Compliance & MCDA Comparative Analysis for tender ${tender.tender_number}.`,
+        reason: 'Automated Multi-Criteria Decision Analysis & Statutory Evaluation',
+        metadata: {
+          evaluationVersion: 1,
+          weights: { compliance: 0.40, experience: 0.20, price: 0.40 },
+          totalBidsCount: intermediateItems.length,
+          eligibleBidsCount: eligibleBids.length,
+          excludedBidsCount: excludedBids.length,
+          lowestEligiblePrice,
+          topRankedBidId: topBid?.bidId,
+          topRankedBidder: topBid?.bidderOrganizationName,
+          topMcdaScore: topBid?.mcdaScore,
+          rankedBids: eligibleBids.map(b => ({ rank: b.rank, bidNumber: b.bidNumber, org: b.bidderOrganizationName, mcda: b.mcdaScore, price: b.bidAmount })),
+          excludedBids: excludedBids.map(b => ({ bidNumber: b.bidNumber, org: b.bidderOrganizationName, reasons: b.ineligibilityReasons }))
+        }
+      });
+    }
+
+    // 7. Existing Decision
+    const existingDecision = await this.getDecisionByTenderId(user, tenderId).catch(() => null);
+
+    return {
+      tenderId,
+      evaluatedAt: new Date().toISOString(),
+      evaluationVersion: 1,
+      weights: { compliance: 40, experience: 20, price: 40 },
+      totalBidsCount: intermediateItems.length,
+      eligibleBidsCount: eligibleBids.length,
+      excludedBidsCount: excludedBids.length,
+      lowestEligiblePrice,
+      rankedBids: eligibleBids,
+      excludedBids: excludedBids,
+      topRankedExplanation,
+      existingDecision
+    };
   }
 
   /**
-   * Create or update a human award decision with mandatory justification validation.
+   * Comparative Bid Analysis for a tender.
+   * Compares all submitted/under-review bids with their compliance scores, risk levels, and MCDA ranking.
+   */
+  static async getTenderBidComparison(user: UserProfile, tenderId: string): Promise<BidComparisonItem[]> {
+    const result = await this.computeTenderMCDAComparison(user, tenderId, { autoRunUnverified: false });
+    return [...result.rankedBids, ...result.excludedBids];
+  }
+
+  /**
+   * Bulk AI Compliance Analysis trigger across all bids belonging to a selected tender.
+   */
+  static async generateAiComplianceAnalysis(user: UserProfile, tenderId: string): Promise<ComparativeEvaluationResult> {
+    return this.computeTenderMCDAComparison(user, tenderId, { autoRunUnverified: true, recordAuditEvent: true });
+  }
+
+  /**
+   * Create or update a human award decision with mandatory justification validation and AI MCDA override auditing.
    */
   static async recordAwardDecision(
     user: UserProfile,
@@ -165,25 +477,31 @@ export class AwardsService {
       );
     }
 
-    // 2. Fetch comparative bids to evaluate less-favorable profile rule
-    const comparativeBids = await this.getTenderBidComparison(user, payload.tenderId);
-    const selected = comparativeBids.find(b => b.bidId === payload.selectedBidId);
+    // 2. Fetch comparative bids to evaluate eligibility gate and MCDA Rank #1 override rule
+    const comparativeResult = await this.computeTenderMCDAComparison(user, payload.tenderId, { autoRunUnverified: false });
+    const allBids = [...comparativeResult.rankedBids, ...comparativeResult.excludedBids];
+    const selected = allBids.find(b => b.bidId === payload.selectedBidId);
 
     if (!selected) {
-      throw new AppError('Selected bid does not belong to this tender or is not eligible.', 400, 'INVALID_SELECTED_BID');
+      throw new AppError('Selected bid does not belong to this tender or is not found.', 400, 'INVALID_SELECTED_BID');
     }
 
-    // Rule: Check if selected bidder has a lower score OR higher risk than another eligible bidder
-    const betterBidderExists = comparativeBids.some(
-      other => other.bidId !== selected.bidId &&
-        (other.complianceScore > selected.complianceScore ||
-         (selected.riskLevel === RiskLevel.HIGH && other.riskLevel === RiskLevel.LOW) ||
-         (selected.riskLevel === RiskLevel.CRITICAL && other.riskLevel !== RiskLevel.CRITICAL))
-    );
-
-    if (betterBidderExists && !payload.justificationText && payload.decisionStatus === AwardDecisionStatus.APPROVED) {
+    // Guard: Ineligible bidder cannot be awarded
+    if (selected.eligibilityStatus === 'FAIL' && payload.decisionStatus === AwardDecisionStatus.APPROVED) {
       throw new AppError(
-        'Selected bidder has a less favorable compliance/risk profile than another reviewed bidder. A detailed statutory procurement justification is mandatory.',
+        `Cannot award contract to an ineligible bidder: ${selected.ineligibilityReasons?.join('; ') || 'Failed mandatory eligibility criteria'}.`,
+        400,
+        'INELIGIBLE_BIDDER_CANNOT_BE_AWARDED'
+      );
+    }
+
+    // Check if selecting a bidder that is not Rank #1
+    const topBidder = comparativeResult.rankedBids[0];
+    const isAiOverridden = Boolean(topBidder && topBidder.bidId !== selected.bidId);
+
+    if (isAiOverridden && !payload.justificationText && payload.decisionStatus === AwardDecisionStatus.APPROVED) {
+      throw new AppError(
+        `Selected bidder (${selected.bidderOrganizationName}) is not the Top-Ranked MCDA recommended contender (Rank #1 is ${topBidder.bidderOrganizationName} with MCDA score ${topBidder.mcdaScore}/100). A detailed statutory procurement justification is mandatory before overriding.`,
         400,
         'JUSTIFICATION_REQUIRED'
       );
@@ -216,12 +534,49 @@ export class AwardsService {
       throw new AppError('Failed to record award decision', 500, 'DB_ERROR', decErr);
     }
 
+    // If overriding Rank #1, persist to ai_overrides registry and append specific audit event
+    if (isAiOverridden && payload.decisionStatus === AwardDecisionStatus.APPROVED && topBidder) {
+      try {
+        await admin.from('ai_overrides').insert({
+          tender_id: payload.tenderId,
+          bid_id: payload.selectedBidId,
+          ai_recommendation_text: `MCDA Comparative Recommendation: Rank #1 ${topBidder.bidderOrganizationName} (Score: ${topBidder.mcdaScore}/100, Price: INR ${Number(topBidder.bidAmount || 0).toLocaleString('en-IN')})`,
+          ai_recommendation_timestamp: comparativeResult.evaluatedAt || new Date().toISOString(),
+          decision_taken: `Award approved to Rank #${selected.rank || 'N/A'} ${selected.bidderOrganizationName} (MCDA Score: ${selected.mcdaScore}/100)`,
+          override_reason: payload.justificationText || payload.decisionReason,
+          supporting_evidence_refs: payload.evidenceReferences || [],
+          officer_user_id: user.id
+        });
+      } catch (err: any) {
+        console.warn('Note recording ai_override record:', err?.message || err);
+      }
+
+      await AuditService.logEvent({
+        eventType: AuditEventType.AI_RECOMMENDATION_OVERRIDDEN,
+        entityType: 'AWARD_DECISION',
+        entityId: decision.id,
+        tenderId: payload.tenderId,
+        bidId: payload.selectedBidId,
+        actorUserId: user.id,
+        actorRole: user.role,
+        description: `Officer selected ${selected.bidderOrganizationName} (Rank #${selected.rank}) over MCDA Rank #1 contender ${topBidder.bidderOrganizationName}.`,
+        reason: payload.justificationText || payload.decisionReason,
+        metadata: {
+          selectedBidId: selected.bidId,
+          selectedRank: selected.rank,
+          selectedMcdaScore: selected.mcdaScore,
+          topRankedBidId: topBidder.bidId,
+          topRankedBidder: topBidder.bidderOrganizationName,
+          topMcdaScore: topBidder.mcdaScore
+        }
+      });
+    }
+
     // If approved, transition tender status to AWARDED and notify all participating bidders
     if (payload.decisionStatus === AwardDecisionStatus.APPROVED) {
       await admin.from('tenders').update({ status: TenderStatus.AWARDED }).eq('id', payload.tenderId);
       await admin.from('bids').update({ status: BidStatus.QUALIFIED }).eq('id', payload.selectedBidId);
 
-      // Fetch tender details for notification text
       const { data: tenderData } = await admin
         .from('tenders')
         .select('tender_number, title')
@@ -230,14 +585,13 @@ export class AwardsService {
       const tenderTitle = tenderData?.title || 'Tender';
       const tenderNumber = tenderData?.tender_number || '';
 
-      // Fetch all participating bids to notify bidders
-      const { data: allBids } = await admin
+      const { data: allBidsToNotify } = await admin
         .from('bids')
         .select('id, bid_number, submitted_by_user_id')
         .eq('tender_id', payload.tenderId);
 
-      if (allBids && allBids.length > 0) {
-        for (const b of allBids) {
+      if (allBidsToNotify && allBidsToNotify.length > 0) {
+        for (const b of allBidsToNotify) {
           if (!b.submitted_by_user_id) continue;
           if (b.id === payload.selectedBidId) {
             await NotificationsService.createNotification({
@@ -292,7 +646,7 @@ export class AwardsService {
       actorRole: user.role,
       description: `Award decision recorded with status '${payload.decisionStatus}' for bid ${selected.bidNumber}.`,
       reason: payload.justificationText || payload.decisionReason,
-      metadata: { complianceScore: selected.complianceScore, riskLevel: selected.riskLevel }
+      metadata: { complianceScore: selected.complianceScore, riskLevel: selected.riskLevel, mcdaScore: selected.mcdaScore, rank: selected.rank }
     });
 
     return {
@@ -558,10 +912,14 @@ export class AwardsService {
       tenderNumber: tender.tender_number,
       winningBidderName: winningOrg?.legal_name || 'Selected Entity',
       isCurrentUserWinner: Boolean(isWinner),
+      isMyBidWinner: Boolean(isWinner),
       awardedAmount: winningAmount,
+      winningBidAmount: winningAmount,
+      complianceScore: Number(dec.selected_compliance_score),
       decisionReason: dec.decision_reason,
       justificationText: dec.justification_text,
       decidedAt: dec.decided_at,
+      awardedAt: dec.decided_at,
       comparison: {
         winning: {
           score: Number(dec.selected_compliance_score),

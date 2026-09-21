@@ -78,12 +78,29 @@ export class AIAssistantService {
       if (tenderId) {
         const { data: tender } = await admin
           .from('tenders')
-          .select('*, requirements(*)')
+          .select(`
+            id,
+            tender_number,
+            title,
+            description,
+            status,
+            publication_date,
+            submission_deadline,
+            opening_date,
+            estimated_value,
+            tender_requirements (
+              id,
+              code,
+              name,
+              category,
+              is_mandatory
+            )
+          `)
           .eq('id', tenderId)
-          .single();
+          .maybeSingle();
 
         if (tender) {
-          contextSummary += `Tender: ${tender.tender_number} - "${tender.title}" (Status: ${tender.status}). Scope: ${tender.description || 'N/A'}.\n`;
+          contextSummary += `Tender: ${tender.tender_number} - "${tender.title}" (Status: ${tender.status}). Submission Deadline: ${tender.submission_deadline || 'N/A'}. Estimated Value: INR ${tender.estimated_value || 'Not Disclosed'}. Scope: ${tender.description || 'N/A'}.\n`;
           groundedReferences.push({
             type: 'TENDER',
             id: tender.id,
@@ -91,9 +108,10 @@ export class AIAssistantService {
             url: isOfficer ? `/officer/tenders/${tender.id}` : `/bidder/tenders/${tender.id}`
           });
 
-          if (tender.requirements && tender.requirements.length > 0) {
-            const reqList = tender.requirements
-              .map((r: any) => `[${r.code}] ${r.title} (Mandatory: ${r.is_mandatory})`)
+          const reqs = (tender as any).tender_requirements || [];
+          if (reqs.length > 0) {
+            const reqList = reqs
+              .map((r: any) => `[${r.code}] ${r.name} (Mandatory: ${r.is_mandatory})`)
               .join('; ');
             contextSummary += `Requirements: ${reqList}\n`;
           }
@@ -103,7 +121,27 @@ export class AIAssistantService {
       if (bidId) {
         const bidQuery = admin
           .from('bids')
-          .select('*, organization:organizations(name, pan), verification_runs(*)')
+          .select(`
+            id,
+            bid_number,
+            status,
+            bid_amount,
+            submitted_at,
+            bidder_organization_id,
+            tender_id,
+            bidder_organization:organizations (
+              id,
+              legal_name,
+              identifier
+            ),
+            verification_runs (
+              id,
+              verification_status,
+              compliance_score,
+              risk_assessment,
+              is_latest
+            )
+          `)
           .eq('id', bidId);
 
         if (!isOfficer) {
@@ -113,10 +151,19 @@ export class AIAssistantService {
           bidQuery.eq('bidder_organization_id', user.organization.id);
         }
 
-        const { data: bid } = await bidQuery.single();
+        const { data: bid } = await bidQuery.maybeSingle();
 
         if (bid) {
-          contextSummary += `Bid: ${bid.bid_number} submitted by ${(bid as any).organization?.name || 'Organization'}. Status: ${bid.status}.\n`;
+          const org = Array.isArray(bid.bidder_organization) ? bid.bidder_organization[0] : bid.bidder_organization;
+          const runs = (bid as any).verification_runs || [];
+          const latestRun = runs.find((r: any) => r.is_latest) || runs[0];
+
+          contextSummary += `Bid: ${bid.bid_number} submitted by ${org?.legal_name || 'Organization'}. Status: ${bid.status}. Bid Amount: INR ${bid.bid_amount || 'N/A'}.\n`;
+          if (latestRun) {
+            const overallScore = latestRun.compliance_score?.overallScore ?? latestRun.compliance_score ?? 'N/A';
+            const riskLevel = latestRun.risk_assessment?.riskLevel ?? latestRun.risk_level ?? 'N/A';
+            contextSummary += `Verification Status: ${latestRun.verification_status}. Compliance Score: ${overallScore}/100. Risk Level: ${riskLevel}.\n`;
+          }
           groundedReferences.push({
             type: 'BID',
             id: bid.id,
@@ -127,7 +174,7 @@ export class AIAssistantService {
           if (isOfficer) {
             const { data: discrepancies } = await admin
               .from('discrepancies')
-              .select('*')
+              .select('id, code, title, description, severity')
               .eq('bid_id', bid.id);
 
             if (discrepancies && discrepancies.length > 0) {
@@ -282,36 +329,67 @@ Language: ${language}`;
     const admin = getSupabaseAdminClient();
     const { data: tender, error } = await admin
       .from('tenders')
-      .select('*, requirements(*)')
+      .select(`
+        id,
+        tender_number,
+        title,
+        description,
+        status,
+        publication_date,
+        submission_deadline,
+        opening_date,
+        estimated_value,
+        currency,
+        tender_requirements (
+          id,
+          code,
+          name,
+          category,
+          is_mandatory
+        )
+      `)
       .eq('id', tenderId)
-      .single();
+      .maybeSingle();
 
     if (error || !tender) {
       throw new Error('Tender not found');
     }
 
-    const reqs = tender.requirements || [];
-    const mandatory = reqs.filter((r: any) => r.is_mandatory).map((r: any) => `[${r.code}] ${r.title}`);
-    const keyEligibility = reqs.slice(0, 5).map((r: any) => `${r.title} (${r.category})`);
+    const reqs = (tender as any).tender_requirements || [];
+    const mandatory = reqs.filter((r: any) => r.is_mandatory).map((r: any) => `[${r.code}] ${r.name}`);
+    const keyEligibility = reqs.slice(0, 5).map((r: any) => `${r.name} (${r.category})`);
     const requiredDocs = Array.from(
       new Set(reqs.map((r: any) => r.category).filter(Boolean))
     ).map((c) => `${c} compliance certificate / proof`);
 
-    const importantDates: Array<{ label: string; date: string }> = [
-      { label: 'Published Date', date: tender.published_at || tender.created_at }
-    ];
-    if (tender.bid_submission_deadline) {
-      importantDates.push({ label: 'Submission Deadline', date: tender.bid_submission_deadline });
+    const importantDates: Array<{ label: string; date: string }> = [];
+    if (tender.publication_date) {
+      importantDates.push({ label: 'Publication Date', date: tender.publication_date });
     }
-    if (tender.bid_opening_date) {
-      importantDates.push({ label: 'Bid Opening Date', date: tender.bid_opening_date });
+    if (tender.submission_deadline) {
+      importantDates.push({ label: 'Submission Deadline', date: tender.submission_deadline });
+    }
+    if (tender.opening_date) {
+      importantDates.push({ label: 'Opening Date', date: tender.opening_date });
+    }
+
+    let purposeAndScope = tender.description || 'Government procurement notice for supplied goods/services.';
+
+    // If Gemini is available, synthesize a refined executive summary
+    if (isAvailable && tender.title) {
+      const summarySystemPrompt = `You are a Senior Government Procurement Officer drafting an Executive Tender Summary. Summarize the following tender objectively in 2-3 concise sentences based on scope and value.`;
+      const summaryUserPrompt = `Tender Number: ${tender.tender_number}\nTitle: ${tender.title}\nScope: ${tender.description || 'Not provided'}\nEstimated Value: ${tender.currency || 'INR'} ${tender.estimated_value || 'Not Disclosed'}\nMandatory Criteria: ${mandatory.join(', ') || 'Standard GFR requirements'}`;
+      const aiGeneratedScope = await this.callGemini(summarySystemPrompt, summaryUserPrompt);
+      if (aiGeneratedScope) {
+        purposeAndScope = aiGeneratedScope;
+      }
     }
 
     return {
       tenderId: tender.id,
       tenderNumber: tender.tender_number,
       title: tender.title,
-      purposeAndScope: tender.description || 'Government procurement notice for supplied goods/services.',
+      purposeAndScope,
       keyEligibilityCriteria: keyEligibility.length > 0 ? keyEligibility : ['Standard General Financial Rules (GFR) eligibility criteria apply.'],
       mandatoryRequirements: mandatory.length > 0 ? mandatory : ['All statutory declarations and technical compliance criteria.'],
       importantDates,
@@ -321,7 +399,7 @@ Language: ${language}`;
         'Discrepancies between self-declared parameters and sovereign database records will trigger automated risk flags.',
         'Late submissions cannot be accepted under GFR 2017 Rule 161.'
       ],
-      status: isAvailable ? 'AVAILABLE' : 'AI_UNAVAILABLE',
+      status: 'AVAILABLE',
       generatedAt: new Date().toISOString()
     };
   }

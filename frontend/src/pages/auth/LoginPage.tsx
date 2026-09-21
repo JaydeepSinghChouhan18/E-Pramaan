@@ -23,13 +23,25 @@ export const LoginPage: React.FC = () => {
     try {
       const loggedUser = await login({ email, password });
       const role = loggedUser?.role;
-      const defaultDest = role === UserRole.BIDDER ? '/bidder/dashboard' : '/officer/dashboard';
+      let defaultDest = '/bidder/dashboard';
+      if (role === UserRole.ADMIN) defaultDest = '/admin/dashboard';
+      else if (role === UserRole.AUDITOR) defaultDest = '/auditor/dashboard';
+      else if (role === UserRole.OFFICER) defaultDest = '/officer/dashboard';
+
       const from = (location.state as any)?.from?.pathname;
 
       // Validate return path belongs to authenticated user's actual database role
       let targetDest = defaultDest;
       if (from && typeof from === 'string' && from.startsWith('/')) {
-        if (role === UserRole.OFFICER || role === UserRole.ADMIN || role === UserRole.AUDITOR) {
+        if (role === UserRole.ADMIN) {
+          if (from.startsWith('/admin') || from.startsWith('/officer') || from === '/help' || from === '/notifications') {
+            targetDest = from;
+          }
+        } else if (role === UserRole.AUDITOR) {
+          if (from.startsWith('/auditor') || from.startsWith('/officer') || from === '/help' || from === '/notifications') {
+            targetDest = from;
+          }
+        } else if (role === UserRole.OFFICER) {
           if (from.startsWith('/officer') || from === '/help' || from === '/notifications') {
             targetDest = from;
           }

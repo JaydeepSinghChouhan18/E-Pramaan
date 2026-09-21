@@ -1,5 +1,30 @@
+import dns from 'dns';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config } from './env.js';
+
+// Ensure reliable DNS resolution for Supabase API endpoints across all local network topologies
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+  const origLookup = dns.lookup;
+  (dns as any).lookup = (hostname: string, options: any, callback: any) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = {};
+    }
+    if (hostname && hostname.includes('supabase.co')) {
+      return dns.resolve4(hostname, (err, addresses) => {
+        if (err || !addresses || addresses.length === 0) return origLookup(hostname, options, callback);
+        if (options && options.all) {
+          return callback(null, addresses.map(addr => ({ address: addr, family: 4 })));
+        }
+        return callback(null, addresses[0], 4);
+      });
+    }
+    return origLookup(hostname, options, callback);
+  };
+} catch {
+  // Silent fallback
+}
 
 let adminClientInstance: SupabaseClient | null = null;
 let publicClientInstance: SupabaseClient | null = null;

@@ -38,11 +38,11 @@ export const AllottedBidsPage: React.FC = () => {
           cards.push({
             tender: t,
             winningBidderName: trans?.winningBidderName || 'Awarded Vendor',
-            winningBidAmount: trans?.winningBidAmount,
-            complianceScore: trans?.complianceScore,
-            awardedAt: trans?.awardedAt,
+            winningBidAmount: trans?.winningBidAmount ?? trans?.awardedAmount,
+            complianceScore: trans?.complianceScore ?? trans?.comparison?.winning?.score,
+            awardedAt: trans?.awardedAt ?? trans?.decidedAt,
             decisionReason: trans?.decisionReason,
-            isMyBidWinner: trans?.isMyBidWinner
+            isMyBidWinner: Boolean(trans?.isMyBidWinner ?? trans?.isCurrentUserWinner)
           });
         } catch {
           // If public award summary not available, display tender info
@@ -166,7 +166,7 @@ export const AllottedBidsPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500 font-semibold">Contract Award Value:</span>
                     <span className="font-mono font-bold text-emerald-700">
-                      ?{item.winningBidAmount.toLocaleString('en-IN')}
+                      ₹ {item.winningBidAmount.toLocaleString('en-IN')}
                     </span>
                   </div>
                 )}

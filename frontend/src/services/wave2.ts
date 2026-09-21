@@ -13,6 +13,7 @@ import {
   AuditEventListItem,
   AuditEventType,
   AIOverrideRecord,
+  ComparativeEvaluationResult,
 } from '@e-pramaan/shared';
 
 export class InvestigationsApi {
@@ -82,14 +83,22 @@ export class AwardsApi {
   static async getComparativeBids(tenderId: string): Promise<{
     tender: any;
     bids: BidComparisonItem[];
+    comparative_evaluation?: ComparativeEvaluationResult;
     existing_decision: AwardDecision | null;
   }> {
     const res = await api.get<{
       tender: any;
       bids: BidComparisonItem[];
+      comparative_evaluation?: ComparativeEvaluationResult;
       existing_decision: AwardDecision | null;
     }>(`/awards/tender/${tenderId}/comparative`);
     if (!res.data) throw new Error(res.message || 'Failed to load comparative bids');
+    return res.data;
+  }
+
+  static async generateAiComplianceAnalysis(tenderId: string): Promise<ComparativeEvaluationResult> {
+    const res = await api.post<ComparativeEvaluationResult>(`/awards/tenders/${tenderId}/ai-compliance-analysis`, {});
+    if (!res.data) throw new Error(res.message || 'Failed to generate AI compliance analysis');
     return res.data;
   }
 

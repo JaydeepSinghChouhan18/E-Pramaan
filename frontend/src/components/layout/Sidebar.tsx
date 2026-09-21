@@ -47,8 +47,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onClose }) => {
     { labelKey: 'nav.create_tender', defaultLabel: 'Create Tender', path: '/officer/tenders/create', icon: FilePlus },
     { labelKey: 'nav.all_tenders', defaultLabel: 'All Tenders', path: '/officer/tenders', icon: Files },
     { labelKey: 'nav.review_bids', defaultLabel: 'Review Bids', path: '/officer/bids/review', icon: ClipboardCheck },
+    { labelKey: 'nav.awards', defaultLabel: 'Awards & Sanction', path: '/officer/awards', icon: Award },
     { labelKey: 'nav.risk_investigation', defaultLabel: 'Risk & Investigation', path: '/officer/risk', icon: ShieldAlert },
     { labelKey: 'nav.audit', defaultLabel: 'Audit & Decisions', path: '/officer/audit', icon: BookOpenCheck },
+    { labelKey: 'nav.ai_assistant', defaultLabel: 'AI Advisor', path: '/officer/ai-assistant', icon: Bot, badge: 'Advisor' },
     { labelKey: 'nav.help', defaultLabel: 'Help', path: '/help', icon: HelpCircle },
   ];
 

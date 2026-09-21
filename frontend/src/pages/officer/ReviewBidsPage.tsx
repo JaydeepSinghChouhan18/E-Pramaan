@@ -10,7 +10,8 @@ import {
   Sparkles,
   Layers,
   Award,
-  CheckCircle2
+  CheckCircle2,
+  Ban,
 } from 'lucide-react';
 import {
   BidListItem,
@@ -19,7 +20,8 @@ import {
   VerificationRun,
   VerificationStatus,
   RiskLevel,
-  BidComparisonItem
+  BidComparisonItem,
+  ComparativeEvaluationResult,
 } from '@e-pramaan/shared';
 import { BidsApi } from '../../services/bids';
 import { TendersApi } from '../../services/tenders';
@@ -43,6 +45,7 @@ export const ReviewBidsPage: React.FC = () => {
 
   // Comparative AI analysis & ranking state
   const [comparativeBids, setComparativeBids] = useState<BidComparisonItem[]>([]);
+  const [comparativeEvaluation, setComparativeEvaluation] = useState<ComparativeEvaluationResult | null>(null);
   const [runningAllVerifications, setRunningAllVerifications] = useState(false);
 
   // Inspector Drawer State
@@ -91,6 +94,7 @@ export const ReviewBidsPage: React.FC = () => {
     if (selectedTenderId) {
       setSearchParams({ tenderId: selectedTenderId });
       setHasGeneratedAI(false);
+      setComparativeEvaluation(null);
     }
   }, [selectedTenderId, setSearchParams]);
 
@@ -99,6 +103,7 @@ export const ReviewBidsPage: React.FC = () => {
     if (!selectedTenderId) {
       setBids([]);
       setComparativeBids([]);
+      setComparativeEvaluation(null);
       return;
     }
 
@@ -107,10 +112,16 @@ export const ReviewBidsPage: React.FC = () => {
       setBidsError(null);
       const [data, compRes] = await Promise.all([
         BidsApi.listBidsForTender(selectedTenderId),
-        AwardsApi.getComparativeBids(selectedTenderId).catch(() => ({ bids: [] }))
+        AwardsApi.getComparativeBids(selectedTenderId).catch(() => ({ bids: [], comparative_evaluation: undefined }))
       ]);
       setBids(data);
       setComparativeBids(compRes.bids || []);
+      if (compRes.comparative_evaluation) {
+        setComparativeEvaluation(compRes.comparative_evaluation);
+        if (compRes.comparative_evaluation.rankedBids?.length > 0) {
+          setHasGeneratedAI(true);
+        }
+      }
     } catch (err: any) {
       setBidsError(err.message || 'Failed to load submitted bids.');
     } finally {
@@ -122,16 +133,16 @@ export const ReviewBidsPage: React.FC = () => {
     fetchBids();
   }, [fetchBids]);
 
-  // Bulk / AI Compliance Verification trigger for all unverified bids
+  // Bulk / AI Compliance Verification & MCDA Ranking trigger for all bids
   const handleRunAllVerifications = async () => {
     if (!selectedTenderId || bids.length === 0) return;
     try {
       setRunningAllVerifications(true);
-      for (const b of bids) {
-        await ComplianceApi.runVerification(b.id).catch(() => null);
-      }
-      await fetchBids();
+      const evalResult = await AwardsApi.generateAiComplianceAnalysis(selectedTenderId);
+      setComparativeEvaluation(evalResult);
+      setComparativeBids([...evalResult.rankedBids, ...evalResult.excludedBids]);
       setHasGeneratedAI(true);
+      await fetchBids();
     } catch (err: any) {
       alert(err.message || 'Failed to run AI compliance analysis.');
     } finally {
@@ -206,27 +217,39 @@ export const ReviewBidsPage: React.FC = () => {
 
   const selectedTender = tenders.find(t => t.id === selectedTenderId);
 
-  // Determine bids ordering:
-  // If hasGeneratedAI is false, sort chronologically by submittedAt desc (date-wise)
-  // If hasGeneratedAI is true, sort by AI recommendation/compliance score desc, then risk
-  const displayedBids = React.useMemo(() => {
-    const list = [...bids];
+  // Separate into eligible bids (ranked) and excluded bids (failed gate)
+  const { eligibleBidsList, excludedBidsList } = React.useMemo(() => {
     if (!hasGeneratedAI) {
-      return list.sort((a, b) => {
+      const sorted = [...bids].sort((a, b) => {
         const timeA = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
         const timeB = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
         return timeB - timeA;
       });
+      return { eligibleBidsList: sorted, excludedBidsList: [] };
     }
 
-    return list.sort((a, b) => {
-      const compA = comparativeBids.find(c => c.bidId === a.id);
-      const compB = comparativeBids.find(c => c.bidId === b.id);
-      const scoreA = compA ? compA.complianceScore : 0;
-      const scoreB = compB ? compB.complianceScore : 0;
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      return (compA?.discrepanciesCount || 0) - (compB?.discrepanciesCount || 0);
+    const eligible: any[] = [];
+    const excluded: any[] = [];
+
+    bids.forEach((bid) => {
+      const comp = comparativeBids.find((c) => c.bidId === bid.id);
+      if (comp?.eligibilityStatus === 'FAIL') {
+        excluded.push({ ...bid, comp });
+      } else {
+        eligible.push({ ...bid, comp });
+      }
     });
+
+    eligible.sort((a, b) => {
+      const rankA = a.comp?.rank ?? 999;
+      const rankB = b.comp?.rank ?? 999;
+      if (rankA !== rankB) return rankA - rankB;
+      const mcdaA = a.comp?.mcdaScore ?? 0;
+      const mcdaB = b.comp?.mcdaScore ?? 0;
+      return mcdaB - mcdaA;
+    });
+
+    return { eligibleBidsList: eligible, excludedBidsList: excluded };
   }, [bids, comparativeBids, hasGeneratedAI]);
 
   return (
@@ -236,10 +259,10 @@ export const ReviewBidsPage: React.FC = () => {
         <div>
           <div className="flex items-center space-x-2">
             <ClipboardCheck className="w-5 h-5 text-gov-navy" />
-            <h1 className="text-base font-bold text-slate-900">Statutory Bid Review & AI Evaluation</h1>
+            <h1 className="text-base font-bold text-slate-900">Statutory Bid Review & AI Compliance Evaluation</h1>
           </div>
           <p className="text-xs text-slate-500 pt-1">
-            Examine submitted bidder dossiers, run deterministic statutory verification rules, and evaluate explainable AI recommendations.
+            Deterministic Multi-Criteria Decision Analysis (MCDA), Mandatory Eligibility Gate, and Verified Evidence Assessment.
           </p>
         </div>
 
@@ -287,25 +310,133 @@ export const ReviewBidsPage: React.FC = () => {
               onClick={handleRunAllVerifications}
               disabled={runningAllVerifications || bids.length === 0}
               className="inline-flex items-center px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-md text-xs font-bold shadow-xs transition disabled:opacity-50"
-              title="Run AI Doc Intelligence & Statutory Verification on all submitted applications"
+              title="Run AI Compliance & Deterministic MCDA Analysis across all submitted applications"
             >
               <Sparkles className={`w-3.5 h-3.5 mr-1.5 ${runningAllVerifications ? 'animate-spin' : ''}`} />
-              {runningAllVerifications ? 'Analyzing All Bids...' : 'Generate AI Compliance Analysis'}
+              {runningAllVerifications ? 'Analyzing All Applications...' : 'Generate AI Compliance Analysis'}
             </button>
           </div>
         </div>
       )}
 
-      {/* Bids Table */}
+      {/* TOP RANKED #1 EXPLANATION CARD */}
+      {hasGeneratedAI && comparativeEvaluation?.topRankedExplanation && (
+        <div className="bg-gradient-to-r from-slate-900 via-purple-950 to-slate-900 text-white rounded-xl p-6 shadow-md border border-purple-800/60 relative overflow-hidden space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-purple-800/50 pb-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-amber-400/20 text-amber-300 rounded-lg border border-amber-400/30">
+                <Award className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest bg-amber-400 text-slate-950 px-2 py-0.5 rounded">
+                    Rank #1 Top Recommendation
+                  </span>
+                  <span className="font-mono text-xs text-purple-200">
+                    {comparativeEvaluation.topRankedExplanation.bidNumber}
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-white pt-1">
+                  {comparativeEvaluation.topRankedExplanation.bidderName}
+                </h3>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6">
+              <div className="text-right">
+                <div className="text-[10px] uppercase font-bold text-purple-200">Composite MCDA Score</div>
+                <div className="text-2xl font-black font-mono text-amber-400">
+                  {comparativeEvaluation.topRankedExplanation.mcdaScore}
+                  <span className="text-xs text-purple-300 font-normal"> / 100</span>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setAwardModalBid({
+                    id: comparativeEvaluation.topRankedExplanation?.bidId,
+                    bidNumber: comparativeEvaluation.topRankedExplanation?.bidNumber,
+                    bidderOrganizationName: comparativeEvaluation.topRankedExplanation?.bidderName,
+                    bidAmount: comparativeEvaluation.topRankedExplanation?.bidAmount,
+                    complianceScore: comparativeEvaluation.topRankedExplanation?.complianceScore,
+                    riskLevel: comparativeEvaluation.topRankedExplanation?.riskLevel || 'LOW',
+                  });
+                }}
+                className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-lg shadow transition flex items-center gap-1.5"
+              >
+                <Award className="w-4 h-4" /> Formulate Award (#1)
+              </button>
+            </div>
+          </div>
+
+          {/* Mathematical Multi-Criteria Weights Breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 py-1">
+            <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+              <div className="flex items-center justify-between text-[11px] text-purple-200 pb-1">
+                <span>1. Statutory Compliance (40%)</span>
+                <span className="font-bold text-emerald-300 font-mono">
+                  {comparativeEvaluation.topRankedExplanation.complianceScore}/100
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-white">
+                Contributes {((comparativeEvaluation.topRankedExplanation.complianceScore * 0.40)).toFixed(1)} pts
+              </div>
+              <p className="text-[10px] text-slate-300 pt-1">
+                Mandatory criteria validation, OCR hash verification, PAN/GSTIN consistency
+              </p>
+            </div>
+
+            <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+              <div className="flex items-center justify-between text-[11px] text-purple-200 pb-1">
+                <span>2. Verified Experience (20%)</span>
+                <span className="font-bold text-amber-300 font-mono">
+                  {comparativeEvaluation.topRankedExplanation.experienceScore}/100
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-white">
+                Contributes {((comparativeEvaluation.topRankedExplanation.experienceScore * 0.20)).toFixed(1)} pts
+              </div>
+              <p className="text-[10px] text-slate-300 pt-1">
+                Verified MCA/CIN incorporation age vs tender threshold
+              </p>
+            </div>
+
+            <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+              <div className="flex items-center justify-between text-[11px] text-purple-200 pb-1">
+                <span>3. Price Competitiveness (40%)</span>
+                <span className="font-bold text-cyan-300 font-mono">
+                  {comparativeEvaluation.topRankedExplanation.priceScore}/100
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-white">
+                Contributes {((comparativeEvaluation.topRankedExplanation.priceScore * 0.40)).toFixed(1)} pts
+              </div>
+              <p className="text-[10px] text-slate-300 pt-1">
+                Normalized formula: (Lowest ₹{comparativeEvaluation.topRankedExplanation.lowestEligiblePrice?.toLocaleString('en-IN')} / Quoted ₹{comparativeEvaluation.topRankedExplanation.bidAmount?.toLocaleString('en-IN')}) × 100
+              </p>
+            </div>
+          </div>
+
+          {/* Mathematical Verification Summary & Evidence */}
+          <div className="pt-2 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs border-t border-purple-800/30">
+            <div className="text-purple-200 text-[11px] leading-relaxed">
+              <strong className="text-white">Deterministic MCDA Formula: </strong>
+              ({comparativeEvaluation.topRankedExplanation.complianceScore} × 0.40) + ({comparativeEvaluation.topRankedExplanation.experienceScore} × 0.20) + ({comparativeEvaluation.topRankedExplanation.priceScore} × 0.40) = <strong className="text-amber-300">{comparativeEvaluation.topRankedExplanation.mcdaScore}/100</strong>.
+              Rankings are fully reproducible and auditable under Public Procurement Standards.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Qualified / Eligible Contenders Table */}
       <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Submitted Bids Registry ({bids.length})
+              {hasGeneratedAI ? `Qualified Award Contenders (${eligibleBidsList.length})` : `Submitted Bids Registry (${bids.length})`}
             </h2>
             {hasGeneratedAI ? (
               <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded font-bold border border-purple-200 flex items-center gap-1">
-                <Sparkles className="w-2.5 h-2.5 text-purple-700" /> AI RANKING ACTIVE
+                <Sparkles className="w-2.5 h-2.5 text-purple-700" /> DETERMINISTIC MCDA RANKING
               </span>
             ) : (
               <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-semibold border border-slate-200">
@@ -315,7 +446,7 @@ export const ReviewBidsPage: React.FC = () => {
           </div>
           <span className="text-[11px] text-slate-500 hidden sm:inline">
             {hasGeneratedAI
-              ? 'Top 2 statutory compliant recommendations highlighted below'
+              ? 'Ranked via MCDA: Compliance (40%), Experience (20%), Price (40%)'
               : 'Click "Generate AI Compliance Analysis" to score and rank recommendations'}
           </span>
         </div>
@@ -327,10 +458,10 @@ export const ReviewBidsPage: React.FC = () => {
             <AlertCircle className="w-6 h-6 text-rose-500 mx-auto" />
             <p className="text-xs text-rose-600">{bidsError}</p>
           </div>
-        ) : displayedBids.length === 0 ? (
+        ) : eligibleBidsList.length === 0 ? (
           <div className="p-12 text-center space-y-2">
             <FileText className="w-8 h-8 text-slate-300 mx-auto" />
-            <h3 className="text-xs font-bold text-slate-700">No submitted applications yet</h3>
+            <h3 className="text-xs font-bold text-slate-700">No applications in this category</h3>
             <p className="text-xs text-slate-500">
               Applications submitted by bidders for this tender will appear here for formal inspection.
             </p>
@@ -340,32 +471,48 @@ export const ReviewBidsPage: React.FC = () => {
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
-                  <th className="py-3 px-4">Bid Ref & AI Status</th>
+                  <th className="py-3 px-4">{hasGeneratedAI ? 'MCDA Rank' : 'Bid Ref'}</th>
                   <th className="py-3 px-4">Bidder Entity</th>
-                  <th className="py-3 px-4">Bid Amount</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Compliance & Risk</th>
-                  <th className="py-3 px-4">Attached Evidence</th>
+                  <th className="py-3 px-4">Quoted Amount</th>
+                  {hasGeneratedAI && <th className="py-3 px-4 text-center">Compliance (40%)</th>}
+                  {hasGeneratedAI && <th className="py-3 px-4 text-center">Experience (20%)</th>}
+                  {hasGeneratedAI && <th className="py-3 px-4 text-center">Price Score (40%)</th>}
+                  {hasGeneratedAI && <th className="py-3 px-4 text-center">Composite MCDA</th>}
+                  <th className="py-3 px-4">Risk Level</th>
                   <th className="py-3 px-4">Submitted At</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {displayedBids.map((bid) => {
-                  const comp = comparativeBids.find(c => c.bidId === bid.id);
-                  const isTop1 = hasGeneratedAI && displayedBids[0]?.id === bid.id && (comp?.complianceScore ?? 0) >= 60;
-                  const isTop2 = hasGeneratedAI && displayedBids[1]?.id === bid.id && (comp?.complianceScore ?? 0) >= 50;
+                {eligibleBidsList.map((bid) => {
+                  const comp = bid.comp || comparativeBids.find(c => c.bidId === bid.id);
+                  const isTop1 = hasGeneratedAI && comp?.rank === 1;
+                  const isTop2 = hasGeneratedAI && comp?.rank === 2;
 
                   return (
                     <tr
                       key={bid.id}
                       className={`hover:bg-slate-50 transition-colors ${
-                        isTop1 ? 'bg-purple-50/40' : isTop2 ? 'bg-indigo-50/30' : ''
+                        isTop1 ? 'bg-purple-50/40 font-medium' : isTop2 ? 'bg-indigo-50/30' : ''
                       }`}
                     >
                       <td className="py-3.5 px-4 font-mono font-bold text-gov-navy">
                         <div className="flex flex-col gap-1">
-                          <span>{bid.bidNumber}</span>
+                          {hasGeneratedAI && comp?.rank ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className={`px-2 py-0.5 rounded text-[11px] font-black ${
+                                isTop1 ? 'bg-amber-400 text-slate-950 shadow-xs' :
+                                isTop2 ? 'bg-indigo-200 text-indigo-950' :
+                                'bg-slate-100 text-slate-700'
+                              }`}>
+                                #{comp.rank}
+                              </span>
+                              <span className="text-[11px] text-slate-500 font-mono">{bid.bidNumber}</span>
+                            </div>
+                          ) : (
+                            <span>{bid.bidNumber}</span>
+                          )}
+
                           {isTop1 && (
                             <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-purple-100 text-purple-900 border border-purple-200 w-fit shadow-2xs">
                               <Sparkles className="w-2.5 h-2.5 text-purple-700" /> AI RECOMMENDED #1
@@ -373,7 +520,7 @@ export const ReviewBidsPage: React.FC = () => {
                           )}
                           {isTop2 && (
                             <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-200 w-fit shadow-2xs">
-                              <Sparkles className="w-2.5 h-2.5 text-indigo-700" /> AI RECOMMENDED #2
+                              <Sparkles className="w-2.5 h-2.5 text-indigo-700" /> RANK #2 CONTENDER
                             </span>
                           )}
                         </div>
@@ -396,48 +543,47 @@ export const ReviewBidsPage: React.FC = () => {
                         )}
                       </td>
 
+                      {hasGeneratedAI && (
+                        <td className="py-3.5 px-4 text-center font-mono">
+                          <span className="font-bold text-slate-900">{comp?.complianceScore ?? '—'}/100</span>
+                        </td>
+                      )}
+
+                      {hasGeneratedAI && (
+                        <td className="py-3.5 px-4 text-center font-mono">
+                          <span className="font-bold text-amber-700">{comp?.experienceScore ?? '—'}/100</span>
+                          {comp?.experienceYears !== undefined && comp?.experienceYears !== null && (
+                            <span className="block text-[10px] text-slate-500">{comp.experienceYears} yrs</span>
+                          )}
+                        </td>
+                      )}
+
+                      {hasGeneratedAI && (
+                        <td className="py-3.5 px-4 text-center font-mono">
+                          <span className="font-bold text-cyan-800">{comp?.priceScore ?? '—'}/100</span>
+                        </td>
+                      )}
+
+                      {hasGeneratedAI && (
+                        <td className="py-3.5 px-4 text-center">
+                          <span className="inline-block px-2 py-0.5 bg-slate-900 text-amber-300 font-mono font-bold rounded text-xs">
+                            {comp?.mcdaScore ?? '—'}
+                          </span>
+                        </td>
+                      )}
+
                       <td className="py-3.5 px-4">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${
-                          bid.status === 'SUBMITTED' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                          bid.status === 'UNDER_REVIEW' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
-                          'bg-slate-100 text-slate-600'
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          (comp?.riskLevel || bid.riskLevel) === RiskLevel.LOW ? 'bg-emerald-100 text-emerald-800' :
+                          (comp?.riskLevel || bid.riskLevel) === RiskLevel.MEDIUM ? 'bg-amber-100 text-amber-800' :
+                          'bg-rose-100 text-rose-800'
                         }`}>
-                          {bid.status}
+                          {comp?.riskLevel || bid.riskLevel || 'LOW'}
                         </span>
                       </td>
 
-                      <td className="py-3.5 px-4">
-                        {comp ? (
-                          <div className="space-y-1">
-                            <div className="flex items-center space-x-1.5">
-                              <span className="font-bold text-slate-900 text-xs">
-                                {comp.complianceScore}/100
-                              </span>
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                                comp.riskLevel === RiskLevel.LOW ? 'bg-emerald-100 text-emerald-800' :
-                                comp.riskLevel === RiskLevel.MEDIUM ? 'bg-amber-100 text-amber-800' :
-                                'bg-rose-100 text-rose-800'
-                              }`}>
-                                {comp.riskLevel}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-500">
-                              {comp.mandatoryComplied ? 'All Mandatory Met' : `${comp.mandatoryMetCount}/${comp.mandatoryTotalCount} Met`}
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="font-medium text-slate-500 text-[11px]">
-                            {bid.mandatorySatisfiedCount} / {bid.mandatoryRequirementCount} Met (Pending AI Run)
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-4 font-mono text-slate-600">
-                        {bid.documentCount} Files
-                      </td>
-
                       <td className="py-3.5 px-4 text-slate-500">
-                        {bid.submittedAt ? new Date(bid.submittedAt).toLocaleString() : 'N/A'}
+                        {bid.submittedAt ? new Date(bid.submittedAt).toLocaleDateString() : 'N/A'}
                       </td>
 
                       <td className="py-3.5 px-4 text-right">
@@ -446,24 +592,24 @@ export const ReviewBidsPage: React.FC = () => {
                             onClick={() => handleInspectBid(bid.id)}
                             className="inline-flex items-center px-2.5 py-1.5 bg-gov-navy text-white text-xs font-semibold rounded hover:bg-gov-navyLight shadow-xs transition"
                           >
-                            <Eye className="w-3.5 h-3.5 mr-1" /> Verify & Inspect
+                            <Eye className="w-3.5 h-3.5 mr-1" /> Inspect
                           </button>
                           <button
                             onClick={() => {
-                              const comp = comparativeBids.find(c => c.bidId === bid.id);
                               setAwardModalBid({
-                                bidId: bid.id,
+                                id: bid.id,
                                 bidNumber: bid.bidNumber,
-                                bidderName: bid.bidderOrganizationName,
-                                submittedAmount: bid.bidAmount || comp?.bidAmount || 18500000,
+                                bidderOrganizationName: bid.bidderOrganizationName,
+                                bidAmount: bid.bidAmount || comp?.bidAmount,
                                 complianceScore: comp?.complianceScore ?? 85,
                                 riskLevel: comp?.riskLevel ?? 'LOW',
-                                isAiRecommended: Boolean(isTop1 || isTop2),
                               });
                             }}
-                            className="inline-flex items-center px-2.5 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded shadow-xs transition"
+                            className={`inline-flex items-center px-2.5 py-1.5 text-white text-xs font-semibold rounded shadow-xs transition ${
+                              isTop1 ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold' : 'bg-purple-700 hover:bg-purple-800'
+                            }`}
                           >
-                            <Award className="w-3.5 h-3.5 mr-1 text-amber-300" /> Award
+                            <Award className="w-3.5 h-3.5 mr-1" /> Award
                           </button>
                         </div>
                       </td>
@@ -475,6 +621,96 @@ export const ReviewBidsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* EXCLUDED FROM AWARD RANKING SECTION (MANDATORY GATE FAILED) */}
+      {hasGeneratedAI && excludedBidsList.length > 0 && (
+        <div className="bg-white rounded-lg border border-rose-200 shadow-sm overflow-hidden">
+          <div className="p-4 bg-rose-50/60 border-b border-rose-200 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Ban className="w-4 h-4 text-rose-600" />
+              <h2 className="text-xs font-bold text-rose-900 uppercase tracking-wider">
+                Excluded from Award Ranking — Mandatory Eligibility Gate Failed ({excludedBidsList.length})
+              </h2>
+            </div>
+            <span className="text-[11px] text-rose-700 font-medium">
+              Ineligible under Public Procurement Gate Rules (Cannot be awarded contract)
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
+                  <th className="py-3 px-4">Bid Ref & Gate Status</th>
+                  <th className="py-3 px-4">Bidder Entity</th>
+                  <th className="py-3 px-4">Quoted Amount</th>
+                  <th className="py-3 px-4">Ineligibility / Disqualification Reasons</th>
+                  <th className="py-3 px-4">Risk</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {excludedBidsList.map((bid) => {
+                  const comp = bid.comp;
+                  return (
+                    <tr key={bid.id} className="hover:bg-rose-50/20 transition-colors bg-rose-50/10">
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-700">
+                        <div className="flex flex-col gap-1">
+                          <span>{bid.bidNumber}</span>
+                          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-rose-100 text-rose-900 border border-rose-200 w-fit">
+                            <Ban className="w-2.5 h-2.5 text-rose-700" /> GATE FAILED
+                          </span>
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 font-semibold text-slate-800">
+                        <div className="flex items-center">
+                          <Building2 className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                          {bid.bidderOrganizationName}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono text-slate-600">
+                        {bid.bidAmount ? `₹${bid.bidAmount.toLocaleString('en-IN')}` : 'Not Disclosed'}
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <div className="space-y-1">
+                          {comp?.ineligibilityReasons && comp.ineligibilityReasons.length > 0 ? (
+                            comp.ineligibilityReasons.map((r: string, idx: number) => (
+                              <div key={idx} className="text-rose-700 font-semibold text-[11px] flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                {r}
+                              </div>
+                            ))
+                          ) : (
+                            <span className="text-rose-700 font-semibold">Failed mandatory eligibility criteria</span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800">
+                          {comp?.riskLevel || 'HIGH'}
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          onClick={() => handleInspectBid(bid.id)}
+                          className="inline-flex items-center px-2.5 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded shadow-xs transition"
+                        >
+                          <Eye className="w-3.5 h-3.5 mr-1" /> Inspect Dossier
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* INSPECTION DRAWER OVERLAY */}
       {inspectingBidId && (

@@ -18,7 +18,7 @@ export const MyDocumentsPage: React.FC = () => {
   const [documents, setDocuments] = useState<BidDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [fetchingDigiLocker, setFetchingDigiLocker] = useState(false);
+  const [digiLockerNotice, setDigiLockerNotice] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<BidDocument | null>(null);
   const [replacingDoc, setReplacingDoc] = useState<BidDocument | null>(null);
   const [replacing, setReplacing] = useState(false);
@@ -88,17 +88,14 @@ export const MyDocumentsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => {
-              setFetchingDigiLocker(true);
-              setTimeout(() => {
-                setFetchingDigiLocker(false);
-                alert('Connected to DigiLocker National Gateway: 3 verified credentials synced successfully (GST Registration, Incorporation Certificate, MSME Udyam).');
-              }, 1200);
+              setDigiLockerNotice(
+                'DigiLocker Sovereign Integration Gateway: Currently running in statutory sandbox mode pending production API credentials from National Informatics Centre (NIC). Please upload or replace credential certificates directly via the document vault below.'
+              );
             }}
-            disabled={fetchingDigiLocker}
-            className="inline-flex items-center px-3.5 py-1.5 bg-gov-navy hover:bg-gov-navyLight text-white rounded text-xs font-bold shadow-2xs transition disabled:opacity-50"
+            className="inline-flex items-center px-3.5 py-1.5 bg-gov-navy hover:bg-gov-navyLight text-white rounded text-xs font-bold shadow-2xs transition"
           >
-            <DownloadCloud className={`w-3.5 h-3.5 mr-1.5 ${fetchingDigiLocker ? 'animate-bounce' : ''}`} />
-            {fetchingDigiLocker ? 'Syncing DigiLocker...' : 'Fetch from DigiLocker'}
+            <DownloadCloud className="w-3.5 h-3.5 mr-1.5" />
+            Connect DigiLocker
           </button>
           <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded border border-slate-200 text-xs">
             <HardDrive className="w-4 h-4 text-slate-500" />
@@ -106,6 +103,22 @@ export const MyDocumentsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {digiLockerNotice && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />
+            <span>{digiLockerNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDigiLockerNotice(null)}
+            className="text-amber-600 hover:text-amber-800 font-bold text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Table */}
       <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">

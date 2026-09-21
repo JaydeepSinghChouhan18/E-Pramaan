@@ -783,6 +783,57 @@ export interface BidComparisonItem {
   openInvestigationsCount: number;
   verificationStatus: VerificationStatus;
   evidenceCount: number;
+
+  // Real MCDA & Comparative Evaluation Fields
+  eligibilityStatus?: 'PASS' | 'FAIL';
+  ineligibilityReasons?: string[];
+  experienceYears?: number | null;
+  experienceScore?: number;
+  experienceEvidenceNote?: string;
+  priceScore?: number;
+  mcdaScore?: number;
+  rank?: number | null;
+  rankingExplanation?: string;
+  mcdaWeights?: {
+    compliance: number;
+    experience: number;
+    price: number;
+  };
+}
+
+export interface ComparativeEvaluationResult {
+  tenderId: string;
+  evaluatedAt: string;
+  evaluationVersion: number;
+  weights: {
+    compliance: number;
+    experience: number;
+    price: number;
+  };
+  totalBidsCount: number;
+  eligibleBidsCount: number;
+  excludedBidsCount: number;
+  lowestEligiblePrice: number | null;
+  rankedBids: BidComparisonItem[];
+  excludedBids: BidComparisonItem[];
+  topRankedExplanation?: {
+    bidId: string;
+    bidNumber: string;
+    bidderName: string;
+    rank: number;
+    mcdaScore: number;
+    complianceScore: number;
+    experienceScore: number;
+    priceScore: number;
+    bidAmount: number | null;
+    lowestEligiblePrice: number | null;
+    weights: { compliance: number; experience: number; price: number };
+    keyVerifiedEvidence: string[];
+    riskLevel: RiskLevel;
+    discrepanciesCount: number;
+    summary: string;
+  } | null;
+  existingDecision?: AwardDecision | null;
 }
 
 export interface AwardDecision {

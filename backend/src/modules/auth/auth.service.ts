@@ -115,7 +115,7 @@ export class AuthService {
       id: userId,
       email: payload.email,
       fullName: payload.fullName,
-      role: payload.role,
+      role: assignedRole,
       isActive: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

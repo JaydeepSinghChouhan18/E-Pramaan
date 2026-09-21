@@ -34,12 +34,13 @@ export const MyAwardedTendersPage: React.FC = () => {
       for (const t of res.items || []) {
         try {
           const trans = await AwardsApi.getBidderTransparency(t.id);
-          if (trans && trans.isMyBidWinner) {
+          const isWinner = Boolean(trans?.isMyBidWinner ?? trans?.isCurrentUserWinner);
+          if (trans && isWinner) {
             wins.push({
               tender: t,
-              winningBidAmount: trans.winningBidAmount,
-              complianceScore: trans.complianceScore,
-              awardedAt: trans.awardedAt,
+              winningBidAmount: trans.winningBidAmount ?? trans.awardedAmount,
+              complianceScore: trans.complianceScore ?? trans.comparison?.winning?.score,
+              awardedAt: trans.awardedAt ?? trans.decidedAt,
               decisionReason: trans.decisionReason
             });
           }

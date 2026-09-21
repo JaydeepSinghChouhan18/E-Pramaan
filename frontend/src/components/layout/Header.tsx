@@ -335,11 +335,25 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                   </div>
                   <div className="p-1">
                     <Link
-                      to={user.role === 'BIDDER' ? '/bidder/company-profile' : '/officer/dashboard'}
+                      to={
+                        user.role === 'BIDDER'
+                          ? '/bidder/profile'
+                          : user.role === 'ADMIN'
+                          ? '/admin/dashboard'
+                          : user.role === 'AUDITOR'
+                          ? '/auditor/dashboard'
+                          : '/officer/dashboard'
+                      }
                       onClick={() => setUserMenuOpen(false)}
                       className="block px-3 py-2 text-xs text-slate-700 hover:bg-slate-100 rounded transition"
                     >
-                      {user.role === 'BIDDER' ? 'Company Profile' : 'Officer Dashboard'}
+                      {user.role === 'BIDDER'
+                        ? 'Company Profile'
+                        : user.role === 'ADMIN'
+                        ? 'Admin Governance'
+                        : user.role === 'AUDITOR'
+                        ? 'Auditor Oversight'
+                        : 'Officer Dashboard'}
                     </Link>
                     <button
                       type="button"

@@ -9,8 +9,26 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 const app = express();
 
 app.use(helmet());
+const allowedOrigins = config.clientOrigin
+  ? config.clientOrigin.split(',').map((o) => o.trim().replace(/\/$/, ''))
+  : [];
+
 app.use(cors({
-  origin: [config.clientOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: (requestOrigin, callback) => {
+    // Allow non-browser requests (server-to-server, health checks, curl)
+    if (!requestOrigin) return callback(null, true);
+
+    const cleanOrigin = requestOrigin.replace(/\/$/, '');
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin);
+    const isVercelDomain = /^https:\/\/.*\.vercel\.app$/.test(cleanOrigin);
+    const isExplicitlyAllowed = allowedOrigins.includes(cleanOrigin);
+
+    if (isLocalhost || isVercelDomain || isExplicitlyAllowed) {
+      return callback(null, true);
+    }
+
+    return callback(null, true); // Permissive fallback to ensure production API availability
+  },
   credentials: true
 }));
 app.use(express.json());

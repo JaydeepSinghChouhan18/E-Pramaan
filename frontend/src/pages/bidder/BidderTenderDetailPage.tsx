@@ -160,16 +160,36 @@ export const BidderTenderDetailPage: React.FC = () => {
               <div className="text-[11px] text-slate-500 font-mono">{tender.tenderDocument}</div>
             </div>
           </div>
-          <a
-            href={`#download-${tender.tenderDocument}`}
-            onClick={(e) => {
-              e.preventDefault();
-              alert(`Downloading official tender specification document: ${tender.tenderDocument}`);
+          <button
+            type="button"
+            onClick={() => {
+              if (tender.tenderDocument?.startsWith('http')) {
+                window.open(tender.tenderDocument, '_blank');
+              } else {
+                const element = window.document.createElement('a');
+                const file = new Blob(
+                  [
+                    `OFFICIAL TENDER NOTICE & RFP SPECIFICATION\n` +
+                    `Tender Number: ${tender.tenderNumber}\n` +
+                    `Title: ${tender.title}\n` +
+                    `Procuring Organization: ${tender.procuringOrganization?.legalName || 'Government Procuring Entity'}\n` +
+                    `Submission Deadline: ${tender.submissionDeadline}\n` +
+                    `Document Reference: ${tender.tenderDocument}\n\n` +
+                    `Description & Scope of Work:\n${tender.description || 'See tender terms'}\n`
+                  ],
+                  { type: 'text/plain;charset=utf-8' }
+                );
+                element.href = URL.createObjectURL(file);
+                element.download = `${tender.tenderNumber}_RFP_Spec.txt`;
+                window.document.body.appendChild(element);
+                element.click();
+                window.document.body.removeChild(element);
+              }
             }}
-            className="inline-flex items-center px-3 py-1.5 bg-indigo-50 border border-indigo-200 rounded text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-2xs"
+            className="inline-flex items-center px-3 py-1.5 bg-indigo-50 border border-indigo-200 rounded text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-2xs cursor-pointer"
           >
             <Download className="w-3.5 h-3.5 mr-1.5" /> Download RFP Spec
-          </a>
+          </button>
         </div>
       )}
 

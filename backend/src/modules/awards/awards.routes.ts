@@ -12,6 +12,13 @@ router.get(
   AwardsController.getTenderBidComparison
 );
 
+router.post(
+  ['/tenders/:tenderId/ai-compliance-analysis', '/tender/:tenderId/ai-compliance-analysis'],
+  requireAuthenticatedUser,
+  requireAnyRole([UserRole.OFFICER, UserRole.ADMIN]),
+  AwardsController.generateAiComplianceAnalysis
+);
+
 router.get(
   ['/tenders/:tenderId/decision', '/tender/:tenderId/decision'],
   requireAuthenticatedUser,

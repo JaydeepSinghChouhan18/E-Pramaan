@@ -52,38 +52,45 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
 
   // Find comparative record if available
   const comp = comparativeBids.find(c => c.bidId === bid.id);
-  const score = bid.complianceScore ?? comp?.complianceScore ?? 85;
+  const score = comp?.mcdaScore ?? bid.complianceScore ?? comp?.complianceScore ?? 85;
+  const complianceScore = comp?.complianceScore ?? bid.complianceScore ?? 85;
   const risk = bid.riskLevel ?? comp?.riskLevel ?? RiskLevel.LOW;
   const amount = bid.bidAmount ?? comp?.bidAmount ?? null;
 
-  // Check if AI recommended or if this is overriding higher score / lower risk
-  const higherScoringBids = comparativeBids.filter(
-    b => b.bidId !== bid.id && b.complianceScore > score
-  );
-  const isAiOverridden = higherScoringBids.length > 0;
-  const topScore = higherScoringBids.length > 0 ? Math.max(...higherScoringBids.map(b => b.complianceScore)) : score;
+  // Top ranked bidder in MCDA evaluation
+  const topBid = comparativeBids.find(b => b.rank === 1) || comparativeBids[0];
+  const isTop1 = topBid ? topBid.bidId === bid.id : true;
+  const isAiOverridden = Boolean(topBid && !isTop1);
+  const isExcluded = comp?.eligibilityStatus === 'FAIL';
 
   const [decisionReason, setDecisionReason] = useState<string>(
     `Bidder ${bid.bidderOrganizationName} (${bid.bidNumber}) has satisfied mandatory statutory compliance thresholds with an overall verified score of ${score}/100 and ${risk} operational risk. Financial proposal is statutorily sound and competitive.`
   );
   const [justificationText, setJustificationText] = useState<string>(
     isAiOverridden
-      ? `Procurement Officer Determination: Selected entity possesses specialized regional industrial domain competence and demonstrated zero-defect project reliability, warranting selection under Rule 173 of GFR 2017.`
+      ? `Procurement Officer Statutory Determination: Selected entity possesses specialized regional industrial domain competence and demonstrated zero-defect project reliability, warranting selection under Rule 173 of GFR 2017.`
       : ''
   );
   const [clarificationNotes, setClarificationNotes] = useState<string>('');
-  const [actionType, setActionType] = useState<'AWARD' | 'DISQUALIFY' | 'CLARIFICATION'>('AWARD');
+  const [actionType, setActionType] = useState<'AWARD' | 'DISQUALIFY' | 'CLARIFICATION'>(
+    isExcluded ? 'DISQUALIFY' : 'AWARD'
+  );
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmitDecision = async () => {
+    if (actionType === 'AWARD' && isExcluded) {
+      setError(`Cannot award contract to an ineligible bidder: ${comp?.ineligibilityReasons?.join('; ') || 'Failed mandatory criteria'}.`);
+      return;
+    }
+
     if (!decisionReason.trim()) {
       setError('Please provide statutory Decision Determination Summary / Findings.');
       return;
     }
 
     if (actionType === 'AWARD' && isAiOverridden && !justificationText.trim()) {
-      setError('Statutory requirement: You must provide detailed justification text before approving an award over higher-scoring or lower-risk bidders.');
+      setError(`Statutory requirement: You must provide detailed justification text before approving an award over MCDA Rank #1 contender (${topBid?.bidderOrganizationName}).`);
       return;
     }
 
@@ -195,8 +202,10 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
             {/* Score & Amount Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
               <div className="bg-white p-2.5 rounded border border-indigo-100">
-                <span className="text-[10px] text-slate-500 uppercase font-bold">Compliance Score</span>
-                <div className="text-base font-bold font-mono text-indigo-900">{score} / 100</div>
+                <span className="text-[10px] text-slate-500 uppercase font-bold">MCDA / Compliance</span>
+                <div className="text-base font-bold font-mono text-indigo-900">
+                  {score} / 100 <span className="text-[10px] text-slate-400 font-normal">({complianceScore} raw)</span>
+                </div>
               </div>
               <div className="bg-white p-2.5 rounded border border-indigo-100">
                 <span className="text-[10px] text-slate-500 uppercase font-bold">Risk Level</span>
@@ -225,6 +234,14 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
             </div>
           </div>
 
+          {/* Ineligible warning banner */}
+          {isExcluded && (
+            <div className="p-3 bg-rose-50 border border-rose-300 rounded-md text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <Ban className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>Mandatory Gate Ineligibility: This bidder has failed mandatory compliance criteria ({comp?.ineligibilityReasons?.join(', ')}). Under statutory procurement rules, an award cannot be approved.</span>
+            </div>
+          )}
+
           {/* Action Tabs: Finalize / Disqualify / Clarification */}
           <div className="space-y-2">
             <span className="font-bold text-slate-800 uppercase text-[10px] tracking-wider">Formulation Action Determination:</span>
@@ -232,8 +249,12 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActionType('AWARD')}
+                disabled={isExcluded}
+                title={isExcluded ? 'Cannot award contract to an ineligible bidder' : undefined}
                 className={`py-2 px-3 rounded-lg border text-center font-bold transition flex items-center justify-center gap-1.5 ${
-                  actionType === 'AWARD'
+                  isExcluded
+                    ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                    : actionType === 'AWARD'
                     ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-1 ring-emerald-500 shadow-xs'
                     : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
@@ -282,7 +303,7 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
             />
           </div>
 
-          {/* AI Override Justification if higher scoring bids exist */}
+          {/* AI Override Justification if selecting bidder other than Rank 1 */}
           {actionType === 'AWARD' && isAiOverridden && (
             <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-lg space-y-2">
               <div className="flex items-center space-x-1.5 text-amber-900 font-bold">
@@ -290,7 +311,7 @@ export const AwardFormulationModal: React.FC<AwardFormulationModalProps> = ({
                 <span>Statutory Exception Justification Required (CAG / CVC Compliance)</span>
               </div>
               <p className="text-[11px] text-amber-800">
-                You are formulating an award to a bidder whose score ({score}) is lower than contender(s) (top score: {topScore}). Under public procurement governance, explicit written justification is mandatory.
+                You are formulating an award to a bidder (Rank #{comp?.rank || 'N/A'}, MCDA Score: {comp?.mcdaScore ?? score}/100) instead of the Top-Ranked contender ({topBid?.bidderOrganizationName || 'Rank #1'}, Rank #1, MCDA Score: {topBid?.mcdaScore}/100). Under public procurement governance, explicit written justification is mandatory.
               </p>
               <textarea
                 rows={2}

@@ -104,13 +104,16 @@ export const AwardsPage: React.FC = () => {
     if (!selectedBid) return { required: false, reasons: [] };
     const reasons: string[] = [];
 
-    const higherScoringBids = bids.filter(
-      (b) => b.bidId !== selectedBid.bidId && b.complianceScore > selectedBid.complianceScore
-    );
-    if (higherScoringBids.length > 0) {
-      const topScore = Math.max(...higherScoringBids.map((b) => b.complianceScore));
+    if (selectedBid.eligibilityStatus === 'FAIL') {
       reasons.push(
-        `Selected bidder compliance score (${selectedBid.complianceScore}) is lower than higher-scoring contender(s) (highest: ${topScore}).`
+        `Selected bidder (${selectedBid.bidderOrganizationName}) failed mandatory eligibility gate: ${selectedBid.ineligibilityReasons?.join('; ') || 'Mandatory criteria unmet'}. Contract award cannot be approved.`
+      );
+    }
+
+    const topBid = bids.find((b) => b.rank === 1) || bids[0];
+    if (topBid && topBid.bidId !== selectedBid.bidId) {
+      reasons.push(
+        `Selected bidder (${selectedBid.bidderOrganizationName}, Rank #${selectedBid.rank || 'N/A'}, MCDA: ${selectedBid.mcdaScore ?? 'N/A'}/100) is NOT the Top-Ranked contender (Rank #1 is ${topBid.bidderOrganizationName} with MCDA score ${topBid.mcdaScore}/100). Explicit statutory justification is mandatory under GFR Rule 173.`
       );
     }
 
@@ -138,7 +141,13 @@ export const AwardsPage: React.FC = () => {
   };
 
   const handleRecordDecision = async (status: AwardDecisionStatus) => {
-    if (!selectedBidId) return;
+    if (!selectedBidId || !selectedBid) return;
+
+    if (status === AwardDecisionStatus.APPROVED && selectedBid.eligibilityStatus === 'FAIL') {
+      setError(`Cannot award contract to an ineligible bidder: ${selectedBid.ineligibilityReasons?.join('; ') || 'Failed mandatory criteria'}.`);
+      return;
+    }
+
     const check = isJustificationRequired();
     if (status === AwardDecisionStatus.APPROVED && check.required && !justificationText.trim()) {
       setError('Statutory requirement: You must provide detailed justification text before approving an award over higher-scoring or lower-risk bidders.');
